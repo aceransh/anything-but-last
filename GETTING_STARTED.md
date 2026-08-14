@@ -38,7 +38,7 @@ From there, the page updates itself automatically. You'll see:
 
 - Whether you're currently on the clock, and how many picks until your turn.
 - A shortlist of the best available players right now, each with a short explanation of why it's a strong option.
-- Your roster filling up live, slot by slot, as you and others draft.
+- Your roster filling up live, slot by slot, as you and others draft — each player shown alongside the round.pick number they were actually drafted at (e.g. `1.01`).
 - A running feed of recent picks.
 
 You can connect to a different draft at any time — just enter a new draft ID and click Connect again, no need to restart anything.
@@ -59,7 +59,9 @@ For every player still on the board, the app asks two main questions:
 
 **"Does this player actually make my team better?"** Rather than assuming whatever slot you happened to draft someone into is where they'll stay, it re-solves your entire best possible starting lineup every time, so a strong player correctly gets credit for upgrading your team even if your literal roster page hasn't caught up yet.
 
-Those two signals get combined into one score per player, the strongest and most varied options get shortlisted, and — if you've set up an API key — Gemini reads that shortlist and writes the actual recommendation you see, in one sentence, grounded in those same numbers. If it's ever too slow to respond in time, the app just uses its own top-scored pick instead, instantly, so you're never left waiting past your turn.
+It also nudges you away from redundant same-team picks — e.g. drafting a wide receiver who'd be fighting one of your own other receivers for targets on the same NFL team — without ever penalizing pairing a QB with their own teammates, since that's a well-known *good* strategy, not a risk.
+
+Those two signals (plus that same-team check) get combined into one score per player, the strongest and most varied options get shortlisted, and — if you've set up an API key — Gemini reads that shortlist and writes the actual recommendation you see, in one sentence, grounded in those same numbers. If it's ever too slow to respond in time, the app just uses its own top-scored pick instead, instantly, so you're never left waiting past your turn.
 
 ## Troubleshooting
 

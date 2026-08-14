@@ -154,6 +154,34 @@ RARC_VARIANCE_LAMBDA = 0.01
 REACH_PENALTY_SIGMA_MULTIPLIER = 3.0
 REACH_PENALTY_CAP = 5.0
 
+# --- Same-team non-QB stack penalty -----------------------------------------
+# Roster-conditioned, like portfolio impact: penalizes drafting a WR/TE
+# candidate who'd be sharing an NFL team's finite target pool with a pass-
+# catcher you already have rostered. Deliberately does NOT apply to QB
+# (QB + same-team pass-catcher is a well-established POSITIVE-correlation
+# strategy, not a competition risk) or to RB in either role (real-world
+# analysis found RB production is driven by rushing volume/goal-line work,
+# largely orthogonal to passing-game target share -- pairing an RB with a
+# same-team pass-catcher is not a meaningful target-competition effect, so
+# it isn't penalized here, correcting an initial intuition that it should be).
+#
+# WR+WR gets the largest penalty: modern NFL offenses concentrate targets
+# toward a clear WR1, so two same-team WRs are close to direct, zero-sum
+# competition for a shrinking pool -- and in a redraft (non-tournament)
+# league there's no correlation upside to offset that risk the way there is
+# for QB stacks. WR+TE is real but smaller: TE usage skews toward
+# intermediate/red-zone routes vs. WR's more downfield/perimeter role, so
+# the overlap is meaningful but not fully zero-sum. No source gave a precise
+# same-team correlation coefficient for either pairing specifically, so
+# these are a proxy calibrated to be a real, felt signal without being able
+# to override a genuinely large value gap -- same design intent as
+# REACH_PENALTY above, and given the same W_REACH_PENALTY-scale weight for
+# comparable impact per unit.
+SAME_TEAM_WR_WR_PENALTY = 1.0
+SAME_TEAM_WR_TE_PENALTY = 0.4
+SAME_TEAM_STACK_PENALTY_CAP = 2.0
+W_SAME_TEAM_STACK_PENALTY = 15.0
+
 # --- Portfolio impact (win probability / ceiling) --------------------------
 # projected_points/std_dev in the CSV are SEASON totals, but win probability
 # is inherently a per-game concept. Comparing season totals directly against
@@ -713,6 +741,48 @@ def _apply_portfolio_impact(df: pd.DataFrame, roster, projections_df: pd.DataFra
     return df
 
 
+def _rostered_team_positions(roster, projections_df: pd.DataFrame) -> list:
+    """(team, position) pairs for every currently-rostered player -- computed
+    once per pipeline run (not once per candidate) for the same-team stack
+    penalty below.
+    """
+    if roster is None:
+        return []
+    pairs = []
+    seen = set()
+    for slot_players in roster.slots.values():
+        for player_name in slot_players:
+            if player_name in seen:
+                continue
+            seen.add(player_name)
+            row = _lookup_player(projections_df, player_name)
+            if row is None:
+                continue
+            pairs.append((row.get("team", ""), row["position"]))
+    return pairs
+
+
+def _same_team_stack_penalty(
+    candidate_position: str, candidate_team, rostered_team_positions: list
+) -> float:
+    """Target-competition penalty for drafting a WR/TE who'd share an NFL
+    team's finite target pool with a pass-catcher already on the roster.
+    Only WR and TE can trigger or be matched here -- QB and RB pairings are
+    intentionally excluded (see SAME_TEAM_WR_WR_PENALTY comment above).
+    """
+    if candidate_position not in ("WR", "TE") or not candidate_team or pd.isna(candidate_team):
+        return 0.0
+    penalty = 0.0
+    for team, position in rostered_team_positions:
+        if team != candidate_team:
+            continue
+        if candidate_position == "WR" and position == "WR":
+            penalty += SAME_TEAM_WR_WR_PENALTY
+        elif {candidate_position, position} == {"WR", "TE"}:
+            penalty += SAME_TEAM_WR_TE_PENALTY
+    return min(penalty, SAME_TEAM_STACK_PENALTY_CAP)
+
+
 def _is_high_contingency_rb(row) -> bool:
     """RB whose own 85th-percentile ceiling is at least
     HIGH_CONTINGENCY_CEILING_MULTIPLIER x their own median projection --
@@ -765,6 +835,7 @@ def _finalize_pareto_candidate(row) -> dict:
         "delta_ceiling_pts": round(float(row["delta_ceiling_pts"]), 1),
         "p_avail_next_turn_pct": round(float(row["survival_prob"]) * 100.0, 1),
         "reach_penalty": round(float(row["reach_penalty"]), 2),
+        "same_team_stack_penalty": round(float(row.get("same_team_stack_penalty", 0.0)), 2),
         "composite_score": round(float(row["composite_score"]), 2),
     }
 
@@ -802,6 +873,8 @@ def _label_candidates(candidates: list, current_pick_no: int) -> None:
             tags.append("Reach Risk")
         elif adp is not None and adp - current_pick_no > 15:
             tags.append("Market Fall")
+        if candidate.get("same_team_stack_penalty", 0.0) > 0:
+            tags.append("Same-Team Stack Risk")
         if i == max_ceiling_idx:
             tags.append("High Ceiling")
         if i == max_rarc_idx:
@@ -857,11 +930,18 @@ def generate_pareto_candidate_stream(
     ]
     available_df = _apply_portfolio_impact(available_df, roster, projections_df)
 
+    rostered_team_positions = _rostered_team_positions(roster, projections_df)
+    available_df["same_team_stack_penalty"] = [
+        _same_team_stack_penalty(pos, team, rostered_team_positions)
+        for pos, team in zip(available_df["position"], available_df["team"])
+    ]
+
     available_df["composite_score"] = (
         W_RARC * available_df["rarc_score"]
         + W_DELTA_WP * available_df["delta_win_prob_pct"]
         + W_DELTA_CEILING * available_df["delta_ceiling_pts"]
         - W_REACH_PENALTY * available_df["reach_penalty"]
+        - W_SAME_TEAM_STACK_PENALTY * available_df["same_team_stack_penalty"]
     )
 
     # Round 14 DEF guarantee: a structural override (guaranteed inclusion),

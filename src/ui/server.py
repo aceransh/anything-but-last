@@ -34,6 +34,7 @@ TEMPLATE_PATH = Path(__file__).parent / "templates" / "index.html"
 
 logging.basicConfig(
     filename=LOG_FILE,
+    filemode="w",  # fresh log each server start, not an unbounded append across dev sessions
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
@@ -69,6 +70,7 @@ _state = {
     "roster_needs": "Not connected",
     "roster_slots": {position: [] for position in ROSTER_SLOTS},
     "roster_slot_capacity": ROSTER_SLOTS,
+    "roster_pick_labels": {},
     "recent_picks": [],
     "draft_complete": False,
 }
@@ -90,7 +92,7 @@ def _snapshot_state() -> dict:
 
 
 def _poll_loop() -> None:
-    """Polls Sleeper, runs the EVONA/roster/Gemini pipeline, and publishes
+    """Polls Sleeper, runs the RARC/roster/Gemini pipeline, and publishes
     each tick into `_state` for the frontend to read. Re-reads `_config`
     every tick so a POST to /api/config can swap the active draft without
     restarting the process.
@@ -98,6 +100,7 @@ def _poll_loop() -> None:
     active_draft_id = None
     my_draft_slot = 1
     roster = Roster()
+    roster_pick_labels: dict[str, str] = {}
     last_pick_count = -1
     regression_streak = 0
     archetypal_candidates: list = []
@@ -118,6 +121,7 @@ def _poll_loop() -> None:
             active_draft_id = desired_draft_id
             my_draft_slot = desired_slot
             roster = Roster()
+            roster_pick_labels = {}
             last_pick_count = -1
             regression_streak = 0
             archetypal_candidates = []
@@ -203,8 +207,9 @@ def _poll_loop() -> None:
         on_the_clock = slot_on_clock == my_draft_slot
         picks_away = picks_until_my_turn(current_pick_no, my_draft_slot, teams)
         eta_seconds = picks_away * pick_timer
-        # EVONA looks forward to the manager's NEXT turn after this pick is
-        # decided, not "0 picks away" when this pick IS that turn.
+        # RARC's survival/replacement math looks forward to the manager's NEXT
+        # turn after this pick is decided, not "0 picks away" when this pick
+        # IS that turn.
         picks_until_next_turn = picks_until_my_turn(current_pick_no + 1, my_draft_slot, teams)
 
         if pick_count != last_pick_count:
@@ -216,14 +221,17 @@ def _poll_loop() -> None:
             recent_picks[:] = recent_picks[:RECENT_PICKS_MAX]
 
             roster = Roster()
+            roster_pick_labels = {}
             for pick in picks:
                 if pick.get("draft_slot") == my_draft_slot and pick.get("metadata"):
-                    _, pick_round, _ = compute_pick_slot(pick["pick_no"], teams)
+                    _, pick_round, pick_slot_in_round = compute_pick_slot(pick["pick_no"], teams)
+                    player_name = f"{pick['metadata']['first_name']} {pick['metadata']['last_name']}"
                     roster.add_player(
-                        f"{pick['metadata']['first_name']} {pick['metadata']['last_name']}",
+                        player_name,
                         pick["metadata"].get("position", "BN"),
                         round_num=pick_round,
                     )
+                    roster_pick_labels[player_name] = f"{pick_round}.{pick_slot_in_round:02d}"
 
             drafted_names = get_drafted_names(picks)
             t0 = time.monotonic()
@@ -311,6 +319,7 @@ def _poll_loop() -> None:
             recommendation=rec_payload,
             roster_needs=roster.roster_needs_summary(),
             roster_slots={position: list(players) for position, players in roster.slots.items()},
+            roster_pick_labels=dict(roster_pick_labels),
             recent_picks=list(recent_picks),
             draft_complete=False,
         )

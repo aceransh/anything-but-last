@@ -274,3 +274,30 @@ assert fallback.recommended_player == expected_best["player_name"], (
     f"best-scoring candidate {expected_best['player_name']}"
 )
 print("PASS: fallback_recommendation is robust to input order and always picks the true best candidate.")
+
+# Rule 14: same-team non-QB stack penalty -- WR+WR (same team) gets the
+# largest penalty, WR+TE a smaller one, RB pairings and QB stacks get none
+# at all (a QB+same-team pass-catcher is a deliberate, desired strategy).
+from src.engine.draft_math import (
+    SAME_TEAM_WR_TE_PENALTY,
+    SAME_TEAM_WR_WR_PENALTY,
+    _rostered_team_positions,
+    _same_team_stack_penalty,
+)
+
+roster14 = Roster()
+roster14.add_player("Rashee Rice", "WR", round_num=2)  # KC WR
+pairs14 = _rostered_team_positions(roster14, load_projections())
+wr_wr_penalty = _same_team_stack_penalty("WR", "KC", pairs14)
+wr_te_penalty = _same_team_stack_penalty("TE", "KC", pairs14)
+rb_penalty = _same_team_stack_penalty("RB", "KC", pairs14)
+qb_penalty = _same_team_stack_penalty("QB", "KC", pairs14)
+other_team_penalty = _same_team_stack_penalty("WR", "BUF", pairs14)
+print(f"\nWith a KC WR already rostered: same-team WR={wr_wr_penalty}, TE={wr_te_penalty}, RB={rb_penalty}, QB={qb_penalty}, other-team WR={other_team_penalty}")
+assert wr_wr_penalty == SAME_TEAM_WR_WR_PENALTY, f"FAIL: same-team WR+WR should be penalized at {SAME_TEAM_WR_WR_PENALTY}, got {wr_wr_penalty}"
+assert wr_te_penalty == SAME_TEAM_WR_TE_PENALTY, f"FAIL: same-team WR+TE should be penalized at {SAME_TEAM_WR_TE_PENALTY}, got {wr_te_penalty}"
+assert wr_wr_penalty > wr_te_penalty, "FAIL: same-team WR+WR should be penalized more heavily than WR+TE"
+assert rb_penalty == 0.0, f"FAIL: RB pairings should never be penalized (not a real target-competition effect), got {rb_penalty}"
+assert qb_penalty == 0.0, f"FAIL: QB stacks should never be penalized (deliberate positive-correlation strategy), got {qb_penalty}"
+assert other_team_penalty == 0.0, f"FAIL: a different-team WR should get no stack penalty, got {other_team_penalty}"
+print("PASS: same-team stack penalty correctly ranks WR+WR > WR+TE > 0, and never penalizes RB pairings or QB stacks.")
