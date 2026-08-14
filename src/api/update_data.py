@@ -10,7 +10,11 @@ import requests
 # id=265860 -> All Positions / Overall board (not a single-position slice),
 # spreadsheet=ppr -> PPR scoring, league=Overall -> the full-league consensus
 # ranking set (this is what carries the "industry_avg" ADP consensus field
-# per player, i.e. Average Draft Position).
+# per player, i.e. Average Draft Position). This board DOES include K/DST
+# (verified directly against the live endpoint: 12 K + 16 DST rows, matching
+# the counts in the backup CSV too) -- an earlier version of this script
+# assumed it didn't and hard-filtered them out via VALID_POSITIONS, which is
+# why K/DEF rows previously had to be added to projections.csv by hand.
 LIVE_API_URL = "https://www.rotoballer.com/wp-json/rb/v1/rankings"
 LIVE_API_PARAMS = {"id": "265860", "spreadsheet": "ppr", "league": "Overall"}
 BACKUP_CSV_CANDIDATES = [
@@ -19,7 +23,11 @@ BACKUP_CSV_CANDIDATES = [
 ]
 OUTPUT_CSV = "data/projections.csv"
 MIN_VALID_PLAYERS = 200
-VALID_POSITIONS = {"QB", "RB", "WR", "TE"}
+VALID_POSITIONS = {"QB", "RB", "WR", "TE", "K", "DEF"}
+# RotoBaller uses "DST" for defenses; the rest of this codebase (Sleeper pick
+# metadata, roster.py, draft_math.py) uses "DEF" -- normalized here so every
+# downstream consumer only ever sees one code.
+POSITION_ALIASES = {"DST": "DEF"}
 
 HEADERS = {
     "User-Agent": (
@@ -31,6 +39,13 @@ HEADERS = {
 # Corrects team assignments that lag behind real roster moves on the scraped source.
 TEAM_CORRECTIONS = {
     "A.J. Brown": "NE",
+}
+
+# RotoBaller's DST rows use "JAC" for Jacksonville while every player row
+# uses "JAX" -- normalized so within-file team matching (e.g. the same-team
+# stack penalty in draft_math.py) never silently misses a real match.
+TEAM_CODE_ALIASES = {
+    "JAC": "JAX",
 }
 
 
@@ -46,6 +61,8 @@ def normalize(
             "adp": pd.to_numeric(df[adp_col], errors="coerce"),
         }
     )
+    normalized["position"] = normalized["position"].replace(POSITION_ALIASES)
+    normalized["team"] = normalized["team"].replace(TEAM_CODE_ALIASES)
     normalized = normalized[normalized["position"].isin(VALID_POSITIONS)]
     normalized = normalized.dropna(subset=["projected_points"])
     normalized["team"] = normalized.apply(
