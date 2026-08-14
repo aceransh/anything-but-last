@@ -1,2 +1,64 @@
 # anything-but-last
-fantasy football ai gm
+
+**An AI fantasy football draft copilot that watches a live Sleeper draft in real time and tells you who to take — backed by a real probabilistic value model, not an LLM guessing at rankings.**
+
+Just want to run it? See **[GETTING_STARTED.md](GETTING_STARTED.md)**.
+
+## The problem
+
+Fantasy draft "AI helpers" usually mean one of two things: a static pre-ranked cheat sheet, or an LLM asked to rank 300 players from memory. Neither reacts to the actual draft in front of you — who's gone, who's about to be gone, what your roster actually needs, what your opponents are about to do.
+
+This project is an attempt at the real version of that: a system that recomputes every player's value from scratch after every single pick, using the live draft state, and only hands an LLM the small, already-diverse shortlist it needs a human-language reason for — while staying fast enough to matter under a 30-second pick clock.
+
+## Highlights
+
+- **Two-tier architecture built around a hard latency budget.** All valuation math runs in plain Python/pandas (~10-50ms). The LLM call is capped at a 10-second timeout with an instant local fallback, so a slow or failed API call never costs you the pick.
+- **A probabilistic replacement-value model (RARC), not a static ranking.** Every player's score accounts for the live probability they survive to your next turn — itself conditioned on real opponent roster needs pulled from the live draft, not an independence assumption.
+- **A real lineup optimizer, not a slot-order assumption.** Every candidate is evaluated against your *actual best possible* starting lineup (re-solved from scratch each time), not whatever slot your draft order happened to assign.
+- **A Pareto-optimal candidate stream**, not a single blended ranking — the shortlist handed to the LLM is explicitly diverse on value vs. upside, so the model is never trapped picking between near-clones.
+- **Debugged like production code.** Several non-obvious correctness bugs were found and fixed through targeted numerical verification against closed-form solutions — see [Engineering notes](#engineering-notes) below.
+
+## Tech stack
+
+Python · pandas · FastAPI · vanilla JS (no frontend framework) · Google Gemini (`google-genai`) · Sleeper's public REST API
+
+No LangChain, no agent framework, no database. Deliberately — see [why](#why-no-agent-framework) below.
+
+## How it works
+
+```text
+Sleeper API  →  Roster / Draft State  →  Math Engine (RARC)  →  Gemini  →  Web UI
+```
+
+1. A background thread polls Sleeper for new picks every 2 seconds.
+2. Every undrafted player is scored by a deterministic engine: projected value, minus a variance penalty, minus the expected value of the best player you could still get at that position next turn — all conditioned on live survival probabilities, not static rankings.
+3. The top candidates are filtered down to a Pareto-optimal, positionally-diverse shortlist of 6-8 players.
+4. That shortlist — never the full player pool — goes to Gemini, which picks one and gives a short, numbers-grounded reason.
+5. If Gemini is slow or down, the app instantly falls back to its own top-scored candidate. The draft never stalls.
+
+## Engineering notes
+
+A few decisions and bugs worth calling out, since they're the actual interesting parts of this project:
+
+**Why the LLM never sees the full player pool.** Early iterations gave the LLM 3 fixed "archetype" candidates and later a larger pool; both had failure modes — too few candidates trapped the model between near-identical options, too many recreated the original latency problem. The current design (a Pareto-frontier-filtered shortlist) is a middle ground: small enough to reason over in one call, diverse enough that the model isn't choosing between clones.
+
+**A subtle probability bug that silently distorted every early-round recommendation.** The survival-probability model computed, for each future pick, the *unconditioned* chance a player gets taken there — which looks reasonable in isolation but silently overestimated survival for any player whose ADP fell before the current pick (a case that should be almost impossible to survive). The fix: convert to a properly conditioned hazard rate (probability of being taken now, *given* survival to now), verified numerically against the closed-form solution until they matched exactly.
+
+**A sort-order bug in the exact code path meant to be the safety net.** The local fallback (used when the LLM call fails) assumed the candidate list was sorted best-first. It wasn't — a separate "always include at least one defense/backup RB for roster completeness" rule inserted picks at the front regardless of their actual score. Found via a full recompute-and-diff sanity check, not a passing test suite — the existing tests all still passed, because none of them checked the *default's* correctness.
+
+## Why no agent framework
+
+The project's binding constraint is a 30-second real-time clock. Agentic loops, multi-step tool chaining, and heavy framework overhead all trade latency for flexibility this use case can't afford — the LLM's entire job is one JSON-in, JSON-out call at the very end of an already-fast pipeline, not a decision-maker with tool access.
+
+## Project layout
+
+```text
+src/
+  api/       Sleeper REST wrapper + offline projections refresh
+  engine/    draft-turn math, roster tracking, the scoring engine
+  llm/       Gemini call, prompt, and local fallback
+  ui/        FastAPI server + single-page dashboard
+data/        static player projections (CSV)
+```
+
+See [GETTING_STARTED.md](GETTING_STARTED.md) for setup, usage, and a plainer-language walkthrough of the math.
