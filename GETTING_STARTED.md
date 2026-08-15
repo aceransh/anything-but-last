@@ -63,6 +63,16 @@ It also nudges you away from redundant same-team picks — e.g. drafting a wide 
 
 Those two signals (plus that same-team check) get combined into one score per player, the strongest and most varied options get shortlisted, and — if you've set up an API key — Gemini reads that shortlist and writes the actual recommendation you see, in one sentence, grounded in those same numbers. If it's ever too slow to respond in time, the app just uses its own top-scored pick instead, instantly, so you're never left waiting past your turn.
 
+## Keeping player projections up to date
+
+The app scores players using a local file (`data/projections.csv`), not a live API call — that's deliberate, it's what keeps recommendations instant during your pick. But that means it only knows what was in that file the last time it was refreshed. Before a draft, refresh it:
+
+```bash
+.venv/bin/python -m src.api.update_data
+```
+
+This pulls the latest rankings/ADP and overwrites `data/projections.csv`. It's not run automatically — run it manually whenever rankings feel stale, ideally right before each draft.
+
 ## Troubleshooting
 
 **"Could not fetch draft from Sleeper"** — double check the draft ID. Mock draft IDs on Sleeper can expire or reset; if one stops working mid-session, start a fresh mock draft and use its new ID.
@@ -82,6 +92,6 @@ Manual regression scripts (not pytest — run directly):
 .venv/bin/python test_api.py <draft_id>      # sanity-checks the Sleeper API wrapper
 ```
 
-Run the first three after changing anything under `src/engine/` or `src/llm/`. Refresh player projections offline with `.venv/bin/python -m src.api.update_data` before a draft (this is not run automatically and does not happen live).
+Run the first three after changing anything under `src/engine/` or `src/llm/`. See [Keeping player projections up to date](#keeping-player-projections-up-to-date) above for refreshing `data/projections.csv`.
 
 For the full technical writeup of how the scoring engine works, see the [README](README.md#engineering-notes) and the comments in `src/engine/draft_math.py`.
