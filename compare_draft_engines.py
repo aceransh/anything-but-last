@@ -1,18 +1,23 @@
-"""Side-by-side comparison of the default engine (draft_math.py +
-data/projections.csv, RotoBaller-sourced) vs. the DraftSharks variant
-(draft_math_ds.py + data/projections_ds.csv, real floor/ceiling variance)
-over two independent simulated 15-round, 12-team snake drafts.
+"""Side-by-side comparison of all three engine variants -- the default
+(draft_math.py + data/projections.csv, RotoBaller-sourced), DraftSharks
+(draft_math_ds.py + data/projections_ds.csv, real floor/ceiling variance),
+and FantasyPros (draft_math_fp.py + data/projections_fp.csv, ECR-as-ADP) --
+over three independent simulated 15-round, 12-team snake drafts.
 
-Not a pass/fail test -- the two data sources have different ADP/points for
+Not a pass/fail test -- the three data sources have different ADP/points for
 the same players, so bot behavior (best-ADP-remaining) and my own picks will
 diverge for reasons beyond just the variance-model swap. This is a report,
-not a regression gate; read it as "how differently do these two produce a
+not a regression gate; read it as "how differently do these three produce a
 draft," not "which one is more correct."
 
 Each simulation is a straight rerun of the logic in test_draft_simulation.py
-/ test_draft_simulation_ds.py, factored into one function so both engines
-run through identical draft-loop mechanics (same slot, same round math) --
-only the engine module and CSV differ.
+/ test_draft_simulation_ds.py / test_draft_simulation_fp.py, factored into
+one function so every engine runs through identical draft-loop mechanics
+(same slot, same round math) -- only the engine module and CSV differ.
+
+The comparison logic below is engine-count-agnostic (loops over ENGINES
+rather than assuming exactly 2), so adding a 4th variant later is just
+another tuple in the list.
 """
 
 import importlib
@@ -24,10 +29,12 @@ TEAMS = 12
 TOTAL_ROUNDS = 15
 TOTAL_PICKS = TEAMS * TOTAL_ROUNDS
 MY_SLOT = 1
+COL_WIDTH = 30
 
 ENGINES = [
     ("Default (RotoBaller)", "src.engine.draft_math", "data/projections.csv"),
     ("DraftSharks (DS)", "src.engine.draft_math_ds", "data/projections_ds.csv"),
+    ("FantasyPros (FP)", "src.engine.draft_math_fp", "data/projections_fp.csv"),
 ]
 
 
@@ -87,29 +94,29 @@ def main() -> None:
         print(f"Running simulation: {label} ...")
         results[label] = run_simulation(module_name, csv_path)
 
-    (label_a, _, _), (label_b, _, _) = ENGINES
-    picks_a, counts_a = results[label_a]
-    picks_b, counts_b = results[label_b]
+    labels = [label for label, _, _ in ENGINES]
+    picks = {label: results[label][0] for label in labels}
+    counts = {label: results[label][1] for label in labels}
 
-    print(f"\n{'Round':<7}{label_a:<32}{label_b:<32}")
-    print("-" * 71)
+    header = "Round".ljust(7) + "".join(label.ljust(COL_WIDTH) for label in labels)
+    print(f"\n{header}")
+    print("-" * (7 + COL_WIDTH * len(labels)))
     for i in range(TOTAL_ROUNDS):
-        pick_no_a, name_a, pos_a = picks_a[i]
-        pick_no_b, name_b, pos_b = picks_b[i]
         round_num = i + 1
-        left = f"{name_a} ({pos_a})"
-        right = f"{name_b} ({pos_b})"
-        match = " " if left == right else "*"
-        print(f"R{round_num:<6}{left:<32}{right:<32}{match}")
+        cells = [f"{picks[label][i][1]} ({picks[label][i][2]})" for label in labels]
+        all_match = len(set(cells)) == 1
+        row = f"R{round_num:<6}" + "".join(cell.ljust(COL_WIDTH) for cell in cells)
+        print(row + (" " if all_match else "*"))
 
     same_count = sum(
         1 for i in range(TOTAL_ROUNDS)
-        if (picks_a[i][1], picks_a[i][2]) == (picks_b[i][1], picks_b[i][2])
+        if len({(picks[label][i][1], picks[label][i][2]) for label in labels}) == 1
     )
-    print(f"\n{same_count}/{TOTAL_ROUNDS} picks matched exactly between the two engines.")
+    print(f"\n{same_count}/{TOTAL_ROUNDS} picks matched exactly across all {len(labels)} engines.")
 
-    print(f"\n{label_a} final roster: {counts_a}")
-    print(f"{label_b} final roster: {counts_b}")
+    print()
+    for label in labels:
+        print(f"{label} final roster: {counts[label]}")
 
 
 if __name__ == "__main__":

@@ -17,6 +17,12 @@
            class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm w-64 focus:outline-none focus:ring-2 focus:ring-emerald-500">
     <input id="draft-slot-input" type="number" min="1" value="1" placeholder="Slot"
            class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm w-20 focus:outline-none focus:ring-2 focus:ring-emerald-500">
+    <select id="data-source-select"
+            class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+      <option value="rotoballer">RotoBaller</option>
+      <option value="draftsharks">DraftSharks</option>
+      <option value="fantasypros" selected>FantasyPros</option>
+    </select>
     <button id="connect-btn"
             class="bg-emerald-600 hover:bg-emerald-500 transition rounded-lg px-4 py-2 text-sm font-semibold">
       Connect Draft
@@ -27,6 +33,14 @@
       <span id="status-text" class="text-slate-400">Not connected</span>
     </div>
   </header>
+
+  <div id="refresh-row" class="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-wrap items-center gap-3">
+    <button id="refresh-btn"
+            class="bg-slate-700 hover:bg-slate-600 transition rounded-lg px-4 py-2 text-sm font-semibold whitespace-nowrap">
+      Refresh Data
+    </button>
+    <span id="refresh-status" class="text-sm text-slate-400"></span>
+  </div>
 
   <div id="error-banner" class="hidden bg-red-950 border border-red-800 text-red-300 rounded-xl p-3 text-sm"></div>
 
@@ -121,12 +135,15 @@ async function loadConfig() {
     const cfg = await res.json();
     if (cfg.draft_id) el('draft-id-input').value = cfg.draft_id;
     if (cfg.my_draft_slot) el('draft-slot-input').value = cfg.my_draft_slot;
+    if (cfg.data_source) el('data-source-select').value = cfg.data_source;
   } catch (e) { /* ignore -- state poll will surface connection issues */ }
+  updateRefreshButtonLabel();
 }
 
 async function connectDraft() {
   const draftId = el('draft-id-input').value.trim();
   const slot = parseInt(el('draft-slot-input').value, 10) || 1;
+  const dataSource = el('data-source-select').value;
   if (!draftId) return;
 
   const btn = el('connect-btn');
@@ -136,11 +153,50 @@ async function connectDraft() {
     await fetch('/api/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ draft_id: draftId, my_draft_slot: slot }),
+      body: JSON.stringify({ draft_id: draftId, my_draft_slot: slot, data_source: dataSource }),
     });
   } finally {
     btn.disabled = false;
     btn.textContent = 'Connect Draft';
+  }
+}
+
+const DATA_SOURCE_LABELS = {
+  rotoballer: 'RotoBaller',
+  draftsharks: 'DraftSharks',
+  fantasypros: 'FantasyPros',
+};
+
+function updateRefreshButtonLabel() {
+  const label = DATA_SOURCE_LABELS[el('data-source-select').value] || '';
+  el('refresh-btn').textContent = `Refresh ${label} Data`;
+  el('refresh-status').textContent = '';
+}
+
+async function refreshDataSource() {
+  const dataSource = el('data-source-select').value;
+  const label = DATA_SOURCE_LABELS[dataSource] || dataSource;
+  const status = el('refresh-status');
+  const btn = el('refresh-btn');
+  btn.disabled = true;
+  btn.textContent = 'Refreshing…';
+  status.textContent = '';
+  try {
+    const res = await fetch(`/api/${dataSource}/refresh`, { method: 'POST' });
+    const result = await res.json();
+    if (result.success) {
+      status.textContent = `Fetched ${result.player_count} players.`;
+      status.className = 'text-sm text-emerald-400';
+    } else {
+      status.textContent = result.error || 'Refresh failed.';
+      status.className = 'text-sm text-red-400';
+    }
+  } catch (e) {
+    status.textContent = 'Refresh failed: server unreachable.';
+    status.className = 'text-sm text-red-400';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = `Refresh ${label} Data`;
   }
 }
 
@@ -329,6 +385,8 @@ async function pollState() {
 }
 
 el('connect-btn').addEventListener('click', connectDraft);
+el('data-source-select').addEventListener('change', updateRefreshButtonLabel);
+el('refresh-btn').addEventListener('click', refreshDataSource);
 loadConfig();
 pollState();
 setInterval(pollState, POLL_MS);

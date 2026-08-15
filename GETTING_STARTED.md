@@ -2,7 +2,7 @@
 
 ## What is this?
 
-A local web app that watches your live Sleeper fantasy football draft and recommends who to pick, in real time, as the draft happens. You open a page, connect it to your draft, and it updates itself automatically with fresh advice as picks come in — polling faster (every second) when you're close to your own turn, and more slowly otherwise.
+A local web app that watches your live Sleeper fantasy football draft and recommends who to pick, in real time, as the draft happens. You open a page, connect it to your draft, and it updates itself automatically with fresh advice as picks come in — checking for new picks every second.
 
 It's not a static cheat sheet — it recalculates its recommendations after every single pick, accounting for who's gone, what your roster still needs, and how likely each remaining player is to still be available the next time it's your turn.
 
@@ -32,7 +32,8 @@ Then open **<http://localhost:8000>** in your browser.
 
 1. Paste your **Sleeper draft ID** into the input box (see below for how to find it).
 2. Enter **your draft slot** — which pick position you are in the draft order (1st, 2nd, 3rd, etc.).
-3. Click **Connect Draft**.
+3. Pick a **data source** — RotoBaller, DraftSharks, or FantasyPros (see [Data sources](#data-sources) below for what's different between them).
+4. Click **Connect Draft**.
 
 From there, the page updates itself automatically. You'll see:
 
@@ -41,7 +42,7 @@ From there, the page updates itself automatically. You'll see:
 - Your roster filling up live, slot by slot, as you and others draft — each player shown alongside the round.pick number they were actually drafted at (e.g. `1.01`).
 - A running feed of recent picks.
 
-You can connect to a different draft at any time — just enter a new draft ID and click Connect again, no need to restart anything.
+You can connect to a different draft, slot, or data source at any time — just change the fields and click Connect again, no need to restart anything.
 
 ### Finding your draft ID
 
@@ -63,15 +64,23 @@ It also nudges you away from redundant same-team picks — e.g. drafting a wide 
 
 Those two signals (plus that same-team check) get combined into one score per player, the strongest and most varied options get shortlisted, and — if you've set up an API key — Gemini reads that shortlist and writes the actual recommendation you see, in one sentence, grounded in those same numbers. If it's ever too slow to respond in time, the app just uses its own top-scored pick instead, instantly, so you're never left waiting past your turn.
 
-## Keeping player projections up to date
+## Data sources
 
-The app scores players using a local file (`data/projections.csv`), not a live API call — that's deliberate, it's what keeps recommendations instant during your pick. But that means it only knows what was in that file the last time it was refreshed. Before a draft, refresh it:
+The app scores players using a local CSV file, not a live API call — that's deliberate, it's what keeps recommendations instant during your pick. There are three interchangeable sources, picked from the dropdown next to the draft ID field:
+
+- **RotoBaller** (`data/projections.csv`) — the default/original source.
+- **DraftSharks** (`data/projections_ds.csv`) — publishes real floor/ceiling projections per player, used here as an actual measured risk signal instead of an estimated one.
+- **FantasyPros** (`data/projections_fp.csv`) — expert-consensus rankings + PPR projections.
+
+Whichever CSV you're using only knows what was in it the last time it was refreshed. Before a draft, refresh whichever source you plan to use — either from the app itself (click **Refresh \<Source\> Data**, which appears next to the data-source dropdown once you've picked one) or from the command line:
 
 ```bash
-.venv/bin/python -m src.api.update_data
+.venv/bin/python -m src.api.update_data              # RotoBaller
+.venv/bin/python -m src.api.update_data_draftsharks   # DraftSharks
+.venv/bin/python -m src.api.update_data_fantasypros   # FantasyPros
 ```
 
-This pulls the latest rankings/ADP and overwrites `data/projections.csv`. It's not run automatically — run it manually whenever rankings feel stale, ideally right before each draft.
+None of these need a login or an API key you have to set up yourself — refreshing is a single command (or button click) either way. Refreshing isn't automatic — run it whenever rankings feel stale, ideally right before each draft.
 
 ## Troubleshooting
 
@@ -86,12 +95,16 @@ This pulls the latest rankings/ADP and overwrites `data/projections.csv`. It's n
 Manual regression scripts (not pytest — run directly):
 
 ```bash
-.venv/bin/python test_draft_math.py         # scoring engine rules, in isolation
-.venv/bin/python test_draft_simulation.py   # full simulated 15-round draft
-.venv/bin/python test_llm.py                # real call to Gemini (needs GEMINI_API_KEY)
-.venv/bin/python test_api.py <draft_id>      # sanity-checks the Sleeper API wrapper
+.venv/bin/python test_draft_math.py            # scoring engine rules (RotoBaller), in isolation
+.venv/bin/python test_draft_simulation.py      # full simulated 15-round draft (RotoBaller)
+.venv/bin/python test_draft_math_ds.py         # same rules, DraftSharks variant
+.venv/bin/python test_draft_simulation_ds.py   # same simulation, DraftSharks variant
+.venv/bin/python test_draft_math_fp.py         # same rules, FantasyPros variant
+.venv/bin/python test_draft_simulation_fp.py   # same simulation, FantasyPros variant
+.venv/bin/python test_llm.py                   # real call to Gemini (needs GEMINI_API_KEY)
+.venv/bin/python test_api.py <draft_id>         # sanity-checks the Sleeper API wrapper
 ```
 
-Run the first three after changing anything under `src/engine/` or `src/llm/`. See [Keeping player projections up to date](#keeping-player-projections-up-to-date) above for refreshing `data/projections.csv`.
+Run the math/simulation pair for whichever engine(s) you touched. `compare_draft_engines.py` (also run directly, no args) is a non-pass/fail report — runs all three engines' independent 15-round simulations and prints how differently they draft, not a regression gate. See [Data sources](#data-sources) above for refreshing each engine's CSV.
 
 For the full technical writeup of how the scoring engine works, see the [README](README.md#engineering-notes) and the comments in `src/engine/draft_math.py`.

@@ -8,8 +8,9 @@ from fastapi.responses import HTMLResponse
 from google.genai import errors as genai_errors
 from pydantic import BaseModel
 
+from src.api import update_data, update_data_draftsharks, update_data_fantasypros
 from src.api.sleeper import get_draft_picks, get_draft_status
-from src.engine.draft_math import detect_roster_archetype, generate_pareto_candidate_stream, get_drafted_names
+from src.engine import draft_math, draft_math_ds, draft_math_fp
 from src.engine.draft_state import compute_pick_slot, format_pick_alert, picks_until_my_turn
 from src.engine.roster import ROSTER_SLOTS, Roster
 from src.llm.client import (
@@ -21,16 +22,22 @@ from src.llm.client import (
 
 logger = logging.getLogger(__name__)
 
-# Adaptive polling: Sleeper's own /picks endpoint only refreshes server-side
-# every ~15-20s regardless of how fast we poll it, so polling faster than
-# that never gets fresher data -- it just burns requests. The one place
-# polling speed still matters is catching a fresh pick the instant it lands
-# right before our turn, so we poll fast only when close to being on the
-# clock and slow otherwise.
-POLL_INTERVAL_NEAR_SECONDS = 1
-POLL_INTERVAL_FAR_SECONDS = 5
-NEAR_TURN_PICKS_THRESHOLD = 5  # "close to my turn" = 0-5 picks away, inclusive
-PROJECTIONS_CSV = "data/projections.csv"
+# Flat 1s polling. Sleeper's own /picks endpoint only refreshes server-side
+# every ~15-20s regardless of how fast we poll it, so this doesn't get
+# fresher data on its own -- but the prior near/far adaptive split wasn't
+# working well in practice, so this reverts to a simple constant interval.
+POLL_INTERVAL_SECONDS = 1
+# Runtime-selectable data sources -- all three engine modules export the
+# same three functions (get_drafted_names, detect_roster_archetype,
+# generate_pareto_candidate_stream) with identical signatures, so swapping
+# is a genuine drop-in: {key: (module, csv_path)}. Key is whatever the
+# frontend's data-source <select> posts as `data_source`.
+DATA_SOURCES = {
+    "rotoballer": (draft_math, "data/projections.csv"),
+    "draftsharks": (draft_math_ds, "data/projections_ds.csv"),
+    "fantasypros": (draft_math_fp, "data/projections_fp.csv"),
+}
+DEFAULT_DATA_SOURCE = "fantasypros"
 LOG_FILE = "draft.log"
 RECENT_PICKS_MAX = 4
 # A single pick-count regression is usually a transient fetch glitch
@@ -40,20 +47,13 @@ RECENT_PICKS_MAX = 4
 MAX_TRANSIENT_REGRESSION_TICKS = 3
 TEMPLATE_PATH = Path(__file__).parent / "templates" / "index.html"
 
-logging.basicConfig(
-    filename=LOG_FILE,
-    filemode="w",  # fresh log each server start, not an unbounded append across dev sessions
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-)
-
 app = FastAPI(title="Fantasy Football Draft Copilot")
 
 _lock = threading.Lock()
 
 # Desired config, set via POST /api/config -- the poll loop watches this and
 # reconnects whenever it changes.
-_config = {"draft_id": None, "my_draft_slot": 1}
+_config = {"draft_id": None, "my_draft_slot": 1, "data_source": DEFAULT_DATA_SOURCE}
 
 # Snapshot the frontend polls via GET /api/state. Same shape at rest and
 # mid-draft so the frontend never has to special-case "not connected yet".
@@ -87,6 +87,7 @@ _state = {
 class ConfigUpdate(BaseModel):
     draft_id: str
     my_draft_slot: int = 1
+    data_source: str = DEFAULT_DATA_SOURCE
 
 
 def _update_state(**kwargs) -> None:
@@ -107,6 +108,8 @@ def _poll_loop() -> None:
     """
     active_draft_id = None
     my_draft_slot = 1
+    active_data_source = None
+    engine = projections_csv = None
     roster = Roster()
     roster_pick_labels: dict[str, str] = {}
     last_pick_count = -1
@@ -120,14 +123,23 @@ def _poll_loop() -> None:
         with _lock:
             desired_draft_id = _config["draft_id"]
             desired_slot = _config["my_draft_slot"]
+            desired_data_source = _config["data_source"]
 
         if desired_draft_id is None:
-            time.sleep(POLL_INTERVAL_FAR_SECONDS)
+            time.sleep(POLL_INTERVAL_SECONDS)
             continue
 
-        if desired_draft_id != active_draft_id or desired_slot != my_draft_slot:
+        if (
+            desired_draft_id != active_draft_id
+            or desired_slot != my_draft_slot
+            or desired_data_source != active_data_source
+        ):
             active_draft_id = desired_draft_id
             my_draft_slot = desired_slot
+            active_data_source = desired_data_source
+            engine, projections_csv = DATA_SOURCES.get(
+                active_data_source, DATA_SOURCES[DEFAULT_DATA_SOURCE]
+            )
             roster = Roster()
             roster_pick_labels = {}
             last_pick_count = -1
@@ -149,13 +161,18 @@ def _poll_loop() -> None:
                 # Force a retry against the same draft_id on the next tick
                 # rather than spinning forever on a stale, already-failed one.
                 active_draft_id = None
-                time.sleep(POLL_INTERVAL_FAR_SECONDS)
+                time.sleep(POLL_INTERVAL_SECONDS)
                 continue
 
             settings = status.get("settings", {})
             teams = settings.get("teams", 12)
             total_rounds = settings.get("rounds", 15)
-            pick_timer = settings.get("pick_timer", 60)
+            # .get(..., 60) only falls back when the key is missing -- Sleeper
+            # returns pick_timer=0 for untimed/fast mock drafts (a real,
+            # present value meaning "no clock enforced"), which slipped past
+            # that default and silently zeroed out eta_seconds downstream
+            # (picks_away * 0 == 0 regardless of how many picks away we are).
+            pick_timer = settings.get("pick_timer") or 60
             total_picks = teams * total_rounds
             _update_state(
                 connected=True,
@@ -188,7 +205,7 @@ def _poll_loop() -> None:
                 )
                 # Proximity to our turn isn't known yet this tick (the fetch
                 # itself is what's in question) -- default to the far interval.
-                time.sleep(POLL_INTERVAL_FAR_SECONDS)
+                time.sleep(POLL_INTERVAL_SECONDS)
                 continue
             # Regressed for too many ticks in a row to still be a blip -- the
             # draft most likely reset/expired underneath us. Resync to the
@@ -210,7 +227,7 @@ def _poll_loop() -> None:
         current_pick_no = pick_count + 1
         if current_pick_no > total_picks:
             _update_state(polling=False, draft_complete=True, on_the_clock=False)
-            time.sleep(POLL_INTERVAL_FAR_SECONDS)
+            time.sleep(POLL_INTERVAL_SECONDS)
             continue
 
         slot_on_clock, round_num, pick_in_round = compute_pick_slot(current_pick_no, teams)
@@ -243,11 +260,11 @@ def _poll_loop() -> None:
                     )
                     roster_pick_labels[player_name] = f"{pick_round}.{pick_slot_in_round:02d}"
 
-            drafted_names = get_drafted_names(picks)
+            drafted_names = engine.get_drafted_names(picks)
             t0 = time.monotonic()
-            archetypal_candidates = generate_pareto_candidate_stream(
+            archetypal_candidates = engine.generate_pareto_candidate_stream(
                 drafted_names,
-                PROJECTIONS_CSV,
+                projections_csv,
                 roster=roster,
                 round_num=round_num,
                 total_rounds=total_rounds,
@@ -275,7 +292,7 @@ def _poll_loop() -> None:
                     "current_round": round_num,
                     "pick_number": current_pick_no,
                     "picks_until_next_turn": picks_until_next_turn,
-                    "roster_archetype_detected": detect_roster_archetype(roster, round_num),
+                    "roster_archetype_detected": engine.detect_roster_archetype(roster, round_num),
                 }
                 t0 = time.monotonic()
                 try:
@@ -334,23 +351,33 @@ def _poll_loop() -> None:
             draft_complete=False,
         )
 
-        next_sleep_seconds = (
-            POLL_INTERVAL_NEAR_SECONDS
-            if picks_away <= NEAR_TURN_PICKS_THRESHOLD
-            else POLL_INTERVAL_FAR_SECONDS
-        )
         logger.info(
             "poll tick for pick #%s: %.2fs total (%s picks away, before %ss sleep)",
             current_pick_no,
             time.monotonic() - tick_start,
             picks_away,
-            next_sleep_seconds,
+            POLL_INTERVAL_SECONDS,
         )
-        time.sleep(next_sleep_seconds)
+        time.sleep(POLL_INTERVAL_SECONDS)
 
 
 @app.on_event("startup")
 def _start_poll_loop() -> None:
+    # Configured here, not at module import time: uvicorn's own startup
+    # calls logging.config.dictConfig() internally, which unconditionally
+    # closes every previously-installed handler via the stdlib's
+    # _clearExistingHandlers() -- regardless of disable_existing_loggers --
+    # so a basicConfig() call at import time gets silently torn down before
+    # this app ever logs anything. Calling it here, after uvicorn's own
+    # logging setup has already run (its dictConfig happens during
+    # Server.serve(), before the ASGI "startup" event fires), makes it
+    # actually stick.
+    logging.basicConfig(
+        filename=LOG_FILE,
+        filemode="w",  # fresh log each server start, not an unbounded append across dev sessions
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
     threading.Thread(target=_poll_loop, daemon=True).start()
 
 
@@ -362,11 +389,102 @@ def get_config() -> dict:
 
 @app.post("/api/config")
 def set_config(update: ConfigUpdate) -> dict:
+    if update.data_source not in DATA_SOURCES:
+        return {"error": f"Unknown data_source '{update.data_source}'. Valid: {list(DATA_SOURCES)}"}
     with _lock:
         _config["draft_id"] = update.draft_id
         _config["my_draft_slot"] = update.my_draft_slot
+        _config["data_source"] = update.data_source
         _state["error"] = None
-    return {"draft_id": update.draft_id, "my_draft_slot": update.my_draft_slot}
+    return {
+        "draft_id": update.draft_id,
+        "my_draft_slot": update.my_draft_slot,
+        "data_source": update.data_source,
+    }
+
+
+@app.post("/api/rotoballer/refresh")
+def refresh_rotoballer() -> dict:
+    """Fetches fresh RotoBaller rankings and rewrites data/projections.csv
+    in place. Same trigger/response shape as the FantasyPros refresh below.
+    """
+    try:
+        df, source = update_data.build_draft_board()
+    except Exception as exc:
+        logger.warning("RotoBaller refresh failed: %s", exc)
+        return {"success": False, "error": f"Fetch failed: {exc}"}
+
+    csv_path = DATA_SOURCES["rotoballer"][1]
+    df.to_csv(csv_path, index=False)
+    draft_math._league_baseline_lineup.cache_clear()
+
+    return {
+        "success": True,
+        "player_count": len(df),
+        "by_position": df["position"].value_counts().to_dict(),
+        "source": source,
+    }
+
+
+@app.post("/api/draftsharks/refresh")
+def refresh_draftsharks() -> dict:
+    """Fetches fresh DraftSharks rankings and rewrites data/projections_ds.csv
+    in place. Same trigger/response shape as the FantasyPros refresh below.
+    """
+    try:
+        df = update_data_draftsharks.fetch_all()
+    except Exception as exc:
+        logger.warning("DraftSharks refresh failed: %s", exc)
+        return {"success": False, "error": f"Fetch failed: {exc}"}
+
+    if len(df) < update_data_draftsharks.MIN_VALID_PLAYERS:
+        return {
+            "success": False,
+            "error": (
+                f"Only parsed {len(df)} valid players "
+                f"(< {update_data_draftsharks.MIN_VALID_PLAYERS}); "
+                "draftsharks.com likely changed its markup."
+            ),
+        }
+
+    csv_path = DATA_SOURCES["draftsharks"][1]
+    df.to_csv(csv_path, index=False)
+    draft_math_ds._league_baseline_lineup.cache_clear()
+
+    return {
+        "success": True,
+        "player_count": len(df),
+        "by_position": df["position"].value_counts().to_dict(),
+    }
+
+
+@app.post("/api/fantasypros/refresh")
+def refresh_fantasypros() -> dict:
+    """Fetches fresh FantasyPros ECR + projections and rewrites
+    data/projections_fp.csv in place. Called from the frontend's 'Refresh
+    FantasyPros Data' button, not from the poll loop. No auth needed -- see
+    update_data_fantasypros.py's module docstring for why.
+    """
+    try:
+        df = update_data_fantasypros.build_draft_board()
+    except update_data_fantasypros.FantasyProsAPIError as exc:
+        return {"success": False, "error": str(exc)}
+    except Exception as exc:
+        logger.warning("FantasyPros refresh failed: %s", exc)
+        return {"success": False, "error": f"Fetch failed: {exc}"}
+
+    csv_path = DATA_SOURCES["fantasypros"][1]
+    df.to_csv(csv_path, index=False)
+    # _league_baseline_lineup is lru_cache'd by csv_path string -- since this
+    # rewrites the same path in place, the cache would otherwise keep
+    # serving the pre-refresh baseline for the rest of the process lifetime.
+    draft_math_fp._league_baseline_lineup.cache_clear()
+
+    return {
+        "success": True,
+        "player_count": len(df),
+        "by_position": df["position"].value_counts().to_dict(),
+    }
 
 
 @app.get("/api/state")
