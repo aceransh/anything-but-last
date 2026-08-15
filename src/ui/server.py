@@ -21,7 +21,15 @@ from src.llm.client import (
 
 logger = logging.getLogger(__name__)
 
-POLL_INTERVAL_SECONDS = 2
+# Adaptive polling: Sleeper's own /picks endpoint only refreshes server-side
+# every ~15-20s regardless of how fast we poll it, so polling faster than
+# that never gets fresher data -- it just burns requests. The one place
+# polling speed still matters is catching a fresh pick the instant it lands
+# right before our turn, so we poll fast only when close to being on the
+# clock and slow otherwise.
+POLL_INTERVAL_NEAR_SECONDS = 1
+POLL_INTERVAL_FAR_SECONDS = 5
+NEAR_TURN_PICKS_THRESHOLD = 5  # "close to my turn" = 0-5 picks away, inclusive
 PROJECTIONS_CSV = "data/projections.csv"
 LOG_FILE = "draft.log"
 RECENT_PICKS_MAX = 4
@@ -114,7 +122,7 @@ def _poll_loop() -> None:
             desired_slot = _config["my_draft_slot"]
 
         if desired_draft_id is None:
-            time.sleep(POLL_INTERVAL_SECONDS)
+            time.sleep(POLL_INTERVAL_FAR_SECONDS)
             continue
 
         if desired_draft_id != active_draft_id or desired_slot != my_draft_slot:
@@ -141,7 +149,7 @@ def _poll_loop() -> None:
                 # Force a retry against the same draft_id on the next tick
                 # rather than spinning forever on a stale, already-failed one.
                 active_draft_id = None
-                time.sleep(POLL_INTERVAL_SECONDS)
+                time.sleep(POLL_INTERVAL_FAR_SECONDS)
                 continue
 
             settings = status.get("settings", {})
@@ -178,7 +186,9 @@ def _poll_loop() -> None:
                     regression_streak,
                     MAX_TRANSIENT_REGRESSION_TICKS,
                 )
-                time.sleep(POLL_INTERVAL_SECONDS)
+                # Proximity to our turn isn't known yet this tick (the fetch
+                # itself is what's in question) -- default to the far interval.
+                time.sleep(POLL_INTERVAL_FAR_SECONDS)
                 continue
             # Regressed for too many ticks in a row to still be a blip -- the
             # draft most likely reset/expired underneath us. Resync to the
@@ -200,7 +210,7 @@ def _poll_loop() -> None:
         current_pick_no = pick_count + 1
         if current_pick_no > total_picks:
             _update_state(polling=False, draft_complete=True, on_the_clock=False)
-            time.sleep(POLL_INTERVAL_SECONDS)
+            time.sleep(POLL_INTERVAL_FAR_SECONDS)
             continue
 
         slot_on_clock, round_num, pick_in_round = compute_pick_slot(current_pick_no, teams)
@@ -324,13 +334,19 @@ def _poll_loop() -> None:
             draft_complete=False,
         )
 
+        next_sleep_seconds = (
+            POLL_INTERVAL_NEAR_SECONDS
+            if picks_away <= NEAR_TURN_PICKS_THRESHOLD
+            else POLL_INTERVAL_FAR_SECONDS
+        )
         logger.info(
-            "poll tick for pick #%s: %.2fs total (before %ss sleep)",
+            "poll tick for pick #%s: %.2fs total (%s picks away, before %ss sleep)",
             current_pick_no,
             time.monotonic() - tick_start,
-            POLL_INTERVAL_SECONDS,
+            picks_away,
+            next_sleep_seconds,
         )
-        time.sleep(POLL_INTERVAL_SECONDS)
+        time.sleep(next_sleep_seconds)
 
 
 @app.on_event("startup")

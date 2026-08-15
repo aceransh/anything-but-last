@@ -31,7 +31,7 @@ No LangChain, no agent framework, no database. Deliberately — see [why](#why-n
 Sleeper API  →  Roster / Draft State  →  Math Engine (RARC)  →  Gemini  →  Web UI
 ```
 
-1. A background thread polls Sleeper for new picks every 2 seconds.
+1. A background thread polls Sleeper for new picks — fast (1s) when you're close to your turn, slower (5s) otherwise, since Sleeper's own endpoint only actually refreshes every ~15-20s regardless of client poll rate.
 2. Every undrafted player is scored by a deterministic engine: projected value, minus a variance penalty, minus the expected value of the best player you could still get at that position next turn — all conditioned on live survival probabilities, not static rankings.
 3. The top candidates are filtered down to a Pareto-optimal, positionally-diverse shortlist of 6-8 players.
 4. That shortlist — never the full player pool — goes to Gemini, which picks one and gives a short, numbers-grounded reason.
@@ -50,6 +50,8 @@ A few decisions and bugs worth calling out, since they're the actual interesting
 **Letting research correct an assumption instead of just implementing it.** Asked to add a penalty for drafting redundant skill-position players from the same NFL team, the natural intuition was that *any* same-team pairing (WR+WR, WR+TE, WR+RB, RB+TE) deserved some penalty, just of varying size. Pulling real fantasy analysis before writing the constants surfaced a meaningful correction: WR+WR and WR+TE genuinely compete for a finite, shrinking target pool, but RB production is driven by rushing/goal-line volume — largely orthogonal to passing-game targets — so RB pairings aren't a real competition risk and shipped with zero penalty instead of a smaller one. Guessing plausible-sounding numbers for all four would have been easy and wrong for two of them.
 
 **Swapping a synthetic proxy for real data without silently double-counting.** The default engine has no real per-player variance data, so it estimates one heuristically. A second data source (DraftSharks) publishes actual floor/ceiling projections per player — a strictly better variance signal, but only if it *replaces* the heuristic rather than stacking on top of it (stacking would double-count the same uncertainty). Rather than touch the production engine's already-tuned behavior, the swap shipped as a parallel, independently-tested engine sharing every other component (RARC, survival probability, portfolio optimizer, Pareto frontier) — isolating the one real change instead of risking a regression in a system that already works. Not every new column from the second source made the cut either: strength-of-schedule was left out on purpose, since it's almost certainly already reflected in the base projection, and layering it in separately would double-count the same effect a second time.
+
+**Polling speed is bounded by the data source, not the client.** The obvious lever for "feels more real-time" is polling faster. But Sleeper's own `/picks` endpoint was observed to only refresh server-side every ~15-20s no matter how fast it's polled — so a flat fast interval just burns requests without getting fresher data. The fix wasn't a faster interval, it was an adaptive one: poll fast (1s) only when close enough to your own turn that catching a fresh pick the instant it lands actually matters, and slow (5s) otherwise.
 
 ## Why no agent framework
 

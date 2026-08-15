@@ -2,7 +2,7 @@
 
 ## What is this?
 
-A local web app that watches your live Sleeper fantasy football draft and recommends who to pick, in real time, as the draft happens. You open a page, connect it to your draft, and it updates itself every couple seconds with fresh advice as picks come in.
+A local web app that watches your live Sleeper fantasy football draft and recommends who to pick, in real time, as the draft happens. You open a page, connect it to your draft, and it updates itself automatically with fresh advice as picks come in — polling faster (every second) when you're close to your own turn, and more slowly otherwise.
 
 It's not a static cheat sheet — it recalculates its recommendations after every single pick, accounting for who's gone, what your roster still needs, and how likely each remaining player is to still be available the next time it's your turn.
 
