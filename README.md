@@ -77,8 +77,12 @@ See [GETTING_STARTED.md](GETTING_STARTED.md) for setup, usage, and a plainer-lan
 
 ## Future improvements
 
-Ideas that would extend this past a single draft-day tool, not yet built:
+The app currently helps for exactly one day of the fantasy season — draft day. Everything below is aimed at the other ~17 weeks, researched and scoped but not yet built. One constraint shapes all of it: Sleeper's API is entirely read-only, so this can only ever be a copilot that tells you exactly what to do — not an autopilot that does it for you.
 
+- **Weekly lineup optimizer.** The most natural next build, and the biggest gap: right now the app goes silent the moment the draft ends. Real per-week player projections turned out to be one parameter change away on a data source already integrated, not a new one to go find — so this reuses the existing lineup-optimizer math almost as-is, just pointed at "who should start this week" instead of "who should I draft."
+- **Injury and bye-week warnings.** A lineup check that flags a starter who's actually on a bye or banged up before you lock it in, using the same roster data the optimizer above already needs.
+- **Trade evaluator, starting simple.** A 2-team version first — score a proposed trade with the app's existing valuation math — before tackling the harder version below.
 - **Multi-team trade finder.** Finding a 1-for-1 trade is easy; finding a 3-team trade where every side's projected value goes up is not something a human can compute by hand. Model league rosters as a graph and run a matching/max-flow algorithm to surface those paths automatically.
+- **Season-long playoff-odds tracker.** Simulate the rest of the season, not just the next matchup, to estimate each team's real playoff probability given where the league actually stands.
 - **Monte Carlo matchup simulator.** A standard "you're projected to win 112-108" hides the difference between a high-floor player and a boom/bust one with the same average. Sampling each player's score from a distribution (mean + variance, both already computed per player by the draft engine) across thousands of simulated matchups turns that into a real win-probability estimate instead of a single number.
-- **Event-driven waiver-wire alerts.** The fantasy manager who claims an injured starter's backup first, before anyone else even sees the news, usually wins that waiver. A background service polling Sleeper's trending-adds endpoint plus injury news, cross-referenced against a league's actual waiver wire, could push that alert automatically.
+- **Event-driven waiver-wire alerts.** The fantasy manager who claims an injured starter's backup first, before anyone else even sees the news, usually wins that waiver. A background service polling Sleeper's trending-adds endpoint plus injury status, cross-referenced against a league's actual waiver wire, could push that alert automatically.
