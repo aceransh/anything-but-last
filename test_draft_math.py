@@ -1,4 +1,4 @@
-from src.engine.draft_math import (
+from src.engine.draft_math_rb import (
     ADP_FALLBACK,
     RB_DEAD_ZONE_ADP_END,
     RB_DEAD_ZONE_ADP_START,
@@ -37,7 +37,7 @@ candidates_final = generate_pareto_candidate_stream(
 print(f"Round 15 (TE reopens): {[(c['player_name'], c['position']) for c in candidates_final]}")
 print("PASS: TE hard-cap logic still gates on TE_FINAL_ROUND_MAX only in the true final round (no crash).")
 
-# Rule 2: elite-tier QB1 (Rounds 1-6) permanently locks out a 2nd QB.
+# Rule 2: elite-tier QB1 (Rounds 1-9) permanently locks out a 2nd QB.
 roster3 = Roster()
 roster3.add_player("Josh Allen", "QB", round_num=2)
 drafted3 = {"Josh Allen"}
@@ -88,7 +88,7 @@ print(f"\nPASS: ADP std dev grows with draft depth (pick 5: {sigma_early:.2f}, p
 # Rule 5: Dead Zone RB volatility -- an RB with ADP inside the Dead Zone
 # window gets a materially higher synthetic std_dev (as a % of points) than
 # a similarly-projected WR, reflecting the documented RB Dead Zone bust rate.
-from src.engine.draft_math import _synthetic_std_dev
+from src.engine.draft_math_rb import _synthetic_std_dev
 
 dead_zone_adp = (RB_DEAD_ZONE_ADP_START + RB_DEAD_ZONE_ADP_END) / 2
 rb_row = {"position": "RB", "adp": dead_zone_adp, "projected_points": 200.0}
@@ -101,7 +101,7 @@ print(f"PASS: Dead Zone RB volatility ({rb_std:.1f}) exceeds a same-projection W
 # Rule 6: reach penalty is continuous, not an instant max-out -- a mild
 # (~1 pick) early selection should score much lower than a severe
 # (~10+ round) reach.
-from src.engine.draft_math import REACH_PENALTY_CAP, _reach_penalty
+from src.engine.draft_math_rb import REACH_PENALTY_CAP, _reach_penalty
 
 sigma = calculate_adp_std_dev(50.0)
 mild_reach = _reach_penalty(adp=51.0, sigma_adp=sigma, current_pick_no=50)
@@ -116,7 +116,7 @@ print("PASS: reach penalty scales continuously with reach severity instead of sa
 # starter at every slot they're eligible for (own position AND FLEX) can't
 # crack the optimal lineup, so contributes zero to both
 # delta_win_prob_pct and delta_ceiling_pts.
-from src.engine.draft_math import _apply_portfolio_impact, _drafted_mask, _filter_hard_capped_positions
+from src.engine.draft_math_rb import _apply_portfolio_impact, _drafted_mask, _filter_hard_capped_positions
 
 roster7 = Roster()
 roster7.add_player("Trey McBride", "TE", round_num=9)  # strong TE fills the TE slot
@@ -160,7 +160,7 @@ print("PASS: the greedy optimizer correctly gives full starter credit to a candi
 
 # Rule 8: Pareto frontier -- a strictly dominated player (worse on both RARC
 # and ceiling delta than another) is excluded from the frontier.
-from src.engine.draft_math import _pareto_frontier
+from src.engine.draft_math_rb import _pareto_frontier
 import pandas as pd
 
 frontier_input = pd.DataFrame([
@@ -177,7 +177,7 @@ print("PASS: strictly-dominated candidates are excluded from the Pareto frontier
 
 # Rule 9: opponent positional demand -- a team's own drafted picks
 # correctly determine which starting positions they still need.
-from src.engine.draft_math import _team_open_starter_needs
+from src.engine.draft_math_rb import _team_open_starter_needs
 
 fake_picks = [
     {"draft_slot": 3, "pick_no": 3, "metadata": {"first_name": "Josh", "last_name": "Allen", "position": "QB"}},
@@ -223,7 +223,7 @@ print("PASS: full pipeline returns a fast, positionally-varied Pareto candidate 
 # 85th-percentile ceiling clears HIGH_CONTINGENCY_CEILING_MULTIPLIER x
 # their own median, even though WR mean projections would otherwise crowd
 # every backup RB out of a pure-RARC-ranked late-round stream.
-from src.engine.draft_math import HIGH_CONTINGENCY_MIN_SLOTS, HIGH_CONTINGENCY_ROUND_START
+from src.engine.draft_math_rb import HIGH_CONTINGENCY_MIN_SLOTS, HIGH_CONTINGENCY_ROUND_START
 
 top132 = df_full.sort_values("adp").head(132)
 drafted11 = {(normalize_name(n), p) for n, p in zip(top132["player_name"], top132["position"])}
@@ -278,7 +278,7 @@ print("PASS: fallback_recommendation is robust to input order and always picks t
 # Rule 14: same-team non-QB stack penalty -- WR+WR (same team) gets the
 # largest penalty, WR+TE a smaller one, RB pairings and QB stacks get none
 # at all (a QB+same-team pass-catcher is a deliberate, desired strategy).
-from src.engine.draft_math import (
+from src.engine.draft_math_rb import (
     SAME_TEAM_WR_TE_PENALTY,
     SAME_TEAM_WR_WR_PENALTY,
     _rostered_team_positions,

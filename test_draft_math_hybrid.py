@@ -1,12 +1,13 @@
-"""FantasyPros (FP) variant of test_draft_math.py -- verifies draft_math_fp.py
-against data/projections_fp.csv. Rule-for-rule identical to test_draft_math.py
-(unlike test_draft_math_ds.py, which swaps Rule 5 for a real-std-dev check):
-draft_math_fp.py's only real difference from draft_math_rb.py is the default CSV
-path, so it keeps the same _synthetic_std_dev heuristic and every other rule
-applies unchanged. See draft_math_fp.py's module docstring for why.
+"""Hybrid variant of test_draft_math.py -- verifies draft_math_hybrid.py
+against data/projections_hybrid.csv. Every rule mirrors test_draft_math.py
+except Rule 5, which tests `_hybrid_std_dev`'s two branches: real
+floor/ceiling-derived variance (DraftSharks' formula) for a row that has
+both values, and a fallback to the original `_synthetic_std_dev` heuristic
+for a row that doesn't -- the one substantive difference from the default
+engine. See draft_math_hybrid.py's module docstring for why.
 """
 
-from src.engine.draft_math_fp import (
+from src.engine.draft_math_hybrid import (
     ADP_FALLBACK,
     RB_DEAD_ZONE_ADP_END,
     RB_DEAD_ZONE_ADP_START,
@@ -93,23 +94,31 @@ sigma_late = calculate_adp_std_dev(150.0)
 assert sigma_late > sigma_early, "FAIL: ADP std dev should grow with pick depth"
 print(f"\nPASS: ADP std dev grows with draft depth (pick 5: {sigma_early:.2f}, pick 150: {sigma_late:.2f}).")
 
-# Rule 5: Dead Zone RB volatility -- an RB with ADP inside the Dead Zone
-# window gets a materially higher synthetic std_dev (as a % of points) than
-# a similarly-projected WR, reflecting the documented RB Dead Zone bust rate.
-from src.engine.draft_math_fp import _synthetic_std_dev
+# Rule 5 (Hybrid-specific): _hybrid_std_dev has two branches -- real
+# floor/ceiling-derived variance (matching DraftSharks' exact formula) for a
+# row that has both, and a fallback to the Dead-Zone-RB-vs-WR synthetic
+# heuristic for a row that doesn't (roughly half the hybrid pool, more at
+# TE/WR -- see update_data_hybrid.py's merge rules).
+from src.engine.draft_math_hybrid import CEILING_Z, _hybrid_std_dev
+
+real_row = {"position": "RB", "projected_points": 200.0, "floor_points": 100.0, "ceiling_points": 300.0}
+real_std = _hybrid_std_dev(real_row)
+expected_real_std = (300.0 - 100.0) / (2 * CEILING_Z)
+assert abs(real_std - expected_real_std) < 1e-9, f"FAIL: real-branch std_dev should match (ceiling-floor)/(2*CEILING_Z), got {real_std} vs expected {expected_real_std}"
+print(f"\nPASS: real-branch std_dev ({real_std:.1f}) matches DraftSharks' formula when floor/ceiling are present.")
 
 dead_zone_adp = (RB_DEAD_ZONE_ADP_START + RB_DEAD_ZONE_ADP_END) / 2
-rb_row = {"position": "RB", "adp": dead_zone_adp, "projected_points": 200.0}
-wr_row = {"position": "WR", "adp": dead_zone_adp, "projected_points": 200.0}
-rb_std = _synthetic_std_dev(rb_row)
-wr_std = _synthetic_std_dev(wr_row)
-assert rb_std > wr_std, f"FAIL: Dead Zone RB std_dev ({rb_std}) should exceed a same-projection WR's ({wr_std})"
-print(f"PASS: Dead Zone RB volatility ({rb_std:.1f}) exceeds a same-projection WR's ({wr_std:.1f}).")
+rb_row = {"position": "RB", "adp": dead_zone_adp, "projected_points": 200.0, "floor_points": None, "ceiling_points": None}
+wr_row = {"position": "WR", "adp": dead_zone_adp, "projected_points": 200.0, "floor_points": None, "ceiling_points": None}
+rb_std = _hybrid_std_dev(rb_row)
+wr_std = _hybrid_std_dev(wr_row)
+assert rb_std > wr_std, f"FAIL: fallback-branch Dead Zone RB std_dev ({rb_std}) should exceed a same-projection WR's ({wr_std})"
+print(f"PASS: fallback-branch std_dev correctly reproduces the synthetic heuristic when floor/ceiling are missing (RB {rb_std:.1f} vs WR {wr_std:.1f}).")
 
 # Rule 6: reach penalty is continuous, not an instant max-out -- a mild
 # (~1 pick) early selection should score much lower than a severe
 # (~10+ round) reach.
-from src.engine.draft_math_fp import REACH_PENALTY_CAP, _reach_penalty
+from src.engine.draft_math_hybrid import REACH_PENALTY_CAP, _reach_penalty
 
 sigma = calculate_adp_std_dev(50.0)
 mild_reach = _reach_penalty(adp=51.0, sigma_adp=sigma, current_pick_no=50)
@@ -124,7 +133,7 @@ print("PASS: reach penalty scales continuously with reach severity instead of sa
 # starter at every slot they're eligible for (own position AND FLEX) can't
 # crack the optimal lineup, so contributes zero to both
 # delta_win_prob_pct and delta_ceiling_pts.
-from src.engine.draft_math_fp import _apply_portfolio_impact, _drafted_mask, _filter_hard_capped_positions
+from src.engine.draft_math_hybrid import _apply_portfolio_impact, _drafted_mask, _filter_hard_capped_positions
 
 roster7 = Roster()
 roster7.add_player("Trey McBride", "TE", round_num=9)  # strong TE fills the TE slot
@@ -148,8 +157,7 @@ print("PASS: a player who can't crack the optimal lineup contributes zero margin
 # current FLEX occupant (or any starter at their own position) correctly
 # gets full starter credit instead of being evaluated as a bench asset,
 # even if a literal draft-order slot assignment would've stuck them on the
-# bench. This is the "Deebo Samuel benched behind a worse FLEX starter" bug
-# the greedy optimizer exists to fix.
+# bench.
 roster7b = Roster()
 roster7b.add_player("Bijan Robinson", "RB", round_num=1)
 roster7b.add_player("Jahmyr Gibbs", "RB", round_num=2)
@@ -168,7 +176,7 @@ print("PASS: the greedy optimizer correctly gives full starter credit to a candi
 
 # Rule 8: Pareto frontier -- a strictly dominated player (worse on both RARC
 # and ceiling delta than another) is excluded from the frontier.
-from src.engine.draft_math_fp import _pareto_frontier
+from src.engine.draft_math_hybrid import _pareto_frontier
 import pandas as pd
 
 frontier_input = pd.DataFrame([
@@ -185,7 +193,7 @@ print("PASS: strictly-dominated candidates are excluded from the Pareto frontier
 
 # Rule 9: opponent positional demand -- a team's own drafted picks
 # correctly determine which starting positions they still need.
-from src.engine.draft_math_fp import _team_open_starter_needs
+from src.engine.draft_math_hybrid import _team_open_starter_needs
 
 fake_picks = [
     {"draft_slot": 3, "pick_no": 3, "metadata": {"first_name": "Josh", "last_name": "Allen", "position": "QB"}},
@@ -231,7 +239,7 @@ print("PASS: full pipeline returns a fast, positionally-varied Pareto candidate 
 # 85th-percentile ceiling clears HIGH_CONTINGENCY_CEILING_MULTIPLIER x
 # their own median, even though WR mean projections would otherwise crowd
 # every backup RB out of a pure-RARC-ranked late-round stream.
-from src.engine.draft_math_fp import HIGH_CONTINGENCY_MIN_SLOTS, HIGH_CONTINGENCY_ROUND_START
+from src.engine.draft_math_hybrid import HIGH_CONTINGENCY_MIN_SLOTS, HIGH_CONTINGENCY_ROUND_START
 
 top132 = df_full.sort_values("adp").head(132)
 drafted11 = {(normalize_name(n), p) for n, p in zip(top132["player_name"], top132["position"])}
@@ -255,10 +263,7 @@ print(f"PASS: at least {HIGH_CONTINGENCY_MIN_SLOTS} High-Contingency RBs guarant
 
 # Rule 12: the returned candidate stream is genuinely sorted best-first by
 # composite_score, even when guaranteed-inclusion picks (Round 10+
-# high-contingency RBs here) score far below the frontier -- a real bug
-# previously let those low-score guaranteed picks sit at index 0 just
-# because they were added to the selection first, which silently broke
-# fallback_recommendation() (see Rule 13) whenever Gemini failed.
+# high-contingency RBs here) score far below the frontier.
 scores11 = [c["composite_score"] for c in candidates11]
 assert scores11 == sorted(scores11, reverse=True), (
     f"FAIL: candidate stream is not sorted best-first by composite_score: {scores11}"
@@ -267,9 +272,7 @@ print(f"\nCandidate stream composite scores (should be descending): {scores11}")
 print("PASS: candidate stream is genuinely sorted best-first, including guaranteed-inclusion picks.")
 
 # Rule 13: fallback_recommendation() picks the actual highest composite_score
-# candidate, not just whatever happens to be first in the list -- verified
-# directly against a deliberately-unsorted input so this test can't pass by
-# accident even if Rule 12's sort were ever removed.
+# candidate, not just whatever happens to be first in the list.
 from src.llm.client import fallback_recommendation
 
 shuffled = [candidates11[-1], candidates11[0], candidates11[len(candidates11) // 2]]
@@ -286,7 +289,7 @@ print("PASS: fallback_recommendation is robust to input order and always picks t
 # Rule 14: same-team non-QB stack penalty -- WR+WR (same team) gets the
 # largest penalty, WR+TE a smaller one, RB pairings and QB stacks get none
 # at all (a QB+same-team pass-catcher is a deliberate, desired strategy).
-from src.engine.draft_math_fp import (
+from src.engine.draft_math_hybrid import (
     SAME_TEAM_WR_TE_PENALTY,
     SAME_TEAM_WR_WR_PENALTY,
     _rostered_team_positions,

@@ -1,4 +1,24 @@
-"""Draft valuation engine -- v2, RARC/Pareto architecture.
+"""Hybrid variant of draft_math_rb.py -- scores against data/projections_hybrid.csv,
+a local merge of RotoBaller + DraftSharks + FantasyPros (see
+src/api/update_data_hybrid.py's module docstring for the exact merge rules:
+median projected_points across sources, median real ADP with FantasyPros'
+ECR as a last-resort fallback, DraftSharks floor/ceiling carried through
+where available).
+
+Deliberately duplicated from draft_math_rb.py rather than modifying it in
+place, matching the DS/FP precedent already established in this codebase.
+The only substantive change from draft_math_rb.py is `_hybrid_std_dev`,
+which replaces `_synthetic_std_dev`: it uses DraftSharks' real
+floor/ceiling-derived variance (`_real_std_dev`'s formula, ported from
+draft_math_ds.py) for any row that has both values, and falls back to the
+original synthetic heuristic for the rest of the pool (DraftSharks' ~250
+players cover only ~half of RB/FP's combined pool, and much less at
+TE/WR -- see CLAUDE.md's "Hybrid Engine Variant" section for the coverage
+numbers). Everything else (RARC, survival probability, portfolio impact,
+Pareto frontier, same-team stack penalty, hard roster-construction rules)
+is IDENTICAL to draft_math_rb.py.
+
+Draft valuation engine -- v2, RARC/Pareto architecture.
 
 Replaces the earlier EVONA + static W_pos-multiplier engine (which
 multiplied a point-value score by arbitrary scalar weights -- 1.5x here,
@@ -76,12 +96,12 @@ KICKER_DEFENSE_ROUNDS_FROM_END = 2  # K/DEF invisible until the final 2 rounds
 # slot for lack of the engine ever surfacing the position.
 FINAL_ROUND_REQUIRED_SLOT_POSITIONS = ("QB", "RB", "WR", "TE", "K", "DEF")
 
-# Dynamic single-QB constraint: an elite-tier QB1 (drafted Rounds 1-6) means
+# Dynamic single-QB constraint: an elite-tier QB1 (drafted Rounds 1-9) means
 # a 2nd QB is locked out for the REST of the draft -- that draft capital
 # already bought a locked-in weekly starter, permanently. A late-round QB1
-# (Round 9+) has no such lock; a 2nd QB there is governed by the normal
+# (Round 10+) has no such lock; a 2nd QB there is governed by the normal
 # hard-cap-at-2 filter.
-QB1_ELITE_ROUND_CUTOFF = 6
+QB1_ELITE_ROUND_CUTOFF = 9
 
 ADP_FALLBACK = 999.0  # players with no meaningful ADP consensus: assume ~always available
 
@@ -214,7 +234,7 @@ W_REACH_PENALTY = 15.0
 # least HIGH_CONTINGENCY_MIN_SLOTS of the 8 stream slots once WR mean
 # projections start dominating late-round RARC and would otherwise crowd
 # every backup RB out of the payload entirely. This is a selection-stage
-# quota (like the Round 14 DEF guarantee below), not a score multiplier --
+# quota (like the K/DEF pre-final-round requirement below), not a score multiplier --
 # it doesn't touch anyone's composite_score.
 #
 # mu + CEILING_Z*std >= 1.3*mu  <=>  std/mu >= (1.3 - 1) / CEILING_Z, solved
@@ -245,7 +265,7 @@ def normalize_name(name: str) -> str:
     """Lowercase, strip punctuation (periods, apostrophes, hyphens, ...) and
     suffixes (Jr/Sr/II/III/IV/V), and collapse whitespace.
 
-    Applied identically to Sleeper pick metadata and projections.csv names so
+    Applied identically to Sleeper pick metadata and projections_hybrid.csv names so
     the two sides always compare as pure name-identity, regardless of minor
     punctuation formatting differences between the two sources.
     """
@@ -335,7 +355,7 @@ def _drafted_mask(df: pd.DataFrame, drafted_player_names) -> pd.Series:
     return exact_match | fallback_match
 
 
-def load_projections(csv_path: str = "data/projections.csv") -> pd.DataFrame:
+def load_projections(csv_path: str = "data/projections_hybrid.csv") -> pd.DataFrame:
     return pd.read_csv(csv_path)
 
 
@@ -352,7 +372,7 @@ def _normal_cdf(x: float, mean: float = 0.0, std: float = 1.0) -> float:
 
 def _qb1_elite_locked(roster) -> bool:
     """True for the rest of the draft once QB1 was drafted in the Elite Tier
-    (Rounds 1-6) -- a 2nd QB is never recommended again after that.
+    (Rounds 1-9) -- a 2nd QB is never recommended again after that.
     """
     if roster is None:
         return False
@@ -407,6 +427,30 @@ def _final_round_required_positions(roster, round_num: int, total_rounds: int) -
     }
     if open_slots.get("FLEX", 0) > 0:
         required |= FLEX_ELIGIBLE
+    return required or None
+
+
+def _kdef_required_positions(roster, round_num: int, total_rounds: int) -> set | None:
+    """During the K/DEF unlock window but before the true final round, hard-
+    restrict the pool to whichever of K/DEF are still unfilled -- not just
+    the softer guaranteed-inclusion nudge this used to be. Needed because
+    _optimal_lineup_value deliberately excludes K/DEF from the win-
+    probability/ceiling model (weekly K/DEF scoring is treated as noise for
+    comparing team strength, a reasonable simplification on its own), which
+    as a side effect means neither position ever earns real dWP/dCeiling
+    credit for filling its own mandatory slot. A lone guaranteed-inclusion
+    candidate relying on RARC alone can lose a close composite_score race to
+    a deep-bench skill-position player -- real data drift exposed exactly
+    this. The true final round is already covered by
+    _final_round_required_positions; this covers the round(s) before it
+    within the same KICKER_DEFENSE_ROUNDS_FROM_END window, guaranteeing at
+    least one of K/DEF gets taken there so the other has the final round
+    free.
+    """
+    if roster is None or round_num >= total_rounds or not _kdef_unlocked(round_num, total_rounds):
+        return None
+    open_slots = roster.open_slots()
+    required = {position for position in ("K", "DEF") if open_slots.get(position, 0) > 0}
     return required or None
 
 
@@ -517,6 +561,22 @@ def _synthetic_std_dev(row) -> float:
     return row["projected_points"] * pct
 
 
+def _hybrid_std_dev(row) -> float:
+    """Real DraftSharks floor/ceiling variance where available (~half the
+    hybrid pool, less at TE/WR -- see update_data_hybrid.py's merge rules),
+    falling back to the synthetic heuristic everywhere else. `_real_std_dev`
+    itself has no null-guard (ceiling - floor on NaN silently produces NaN,
+    which would poison rarc_score/composite_score downstream with no error),
+    so the presence check has to happen HERE, before ever touching the
+    floor/ceiling columns -- not inside a shared function both branches call.
+    """
+    floor = row.get("floor_points")
+    ceiling = row.get("ceiling_points")
+    if pd.notna(floor) and pd.notna(ceiling):
+        return max(0.0, (ceiling - floor) / (2 * CEILING_Z))
+    return _synthetic_std_dev(row)
+
+
 def _dynamic_baseline(position_df: pd.DataFrame) -> float:
     """B_pos(K) = expected value of the single best player at this position
     who's still available at the user's next turn:
@@ -544,7 +604,7 @@ def _apply_rarc(df: pd.DataFrame, current_pick_no: int, demand_steps: list) -> p
     df = df.copy()
     adp = df["adp"].fillna(ADP_FALLBACK)
     df["sigma_adp"] = adp.apply(calculate_adp_std_dev)
-    df["std_dev"] = df.apply(_synthetic_std_dev, axis=1)
+    df["std_dev"] = df.apply(_hybrid_std_dev, axis=1)
     df["survival_prob"] = [
         _survival_probability(a, s, p, current_pick_no, demand_steps)
         for a, s, p in zip(adp, df["sigma_adp"], df["position"])
@@ -570,7 +630,7 @@ def _reach_penalty(adp: float, sigma_adp: float, current_pick_no: int) -> float:
 
 
 @functools.lru_cache(maxsize=4)
-def _league_baseline_lineup(csv_path: str = "data/projections.csv") -> tuple:
+def _league_baseline_lineup(csv_path: str = "data/projections_hybrid.csv") -> tuple:
     """A generic 'average starting lineup' mean/std, used as the opponent
     distribution in the win-probability model. Sleeper's draft endpoints
     expose picks only, not a real season schedule or 11 opponents' full
@@ -636,7 +696,7 @@ def _build_rostered_pool(roster, projections_df: pd.DataFrame) -> list:
                     "player_name": player_name,
                     "position": row["position"],
                     "effective_points": row["projected_points"],
-                    "std_dev": _synthetic_std_dev(row),
+                    "std_dev": _hybrid_std_dev(row),
                 }
             )
     return pool
@@ -884,7 +944,7 @@ def _label_candidates(candidates: list, current_pick_no: int) -> None:
 
 def generate_pareto_candidate_stream(
     drafted_player_names: set,
-    csv_path: str = "data/projections.csv",
+    csv_path: str = "data/projections_hybrid.csv",
     roster=None,
     round_num: int = 1,
     total_rounds: int = 15,
@@ -905,7 +965,9 @@ def generate_pareto_candidate_stream(
 
     available_df = _filter_hard_capped_positions(available_df, roster, round_num, total_rounds)
 
-    required_positions = _final_round_required_positions(roster, round_num, total_rounds)
+    required_positions = _final_round_required_positions(
+        roster, round_num, total_rounds
+    ) or _kdef_required_positions(roster, round_num, total_rounds)
     if required_positions:
         forced_df = available_df[available_df["position"].isin(required_positions)]
         if not forced_df.empty:
@@ -944,19 +1006,10 @@ def generate_pareto_candidate_stream(
         - W_SAME_TEAM_STACK_PENALTY * available_df["same_team_stack_penalty"]
     )
 
-    # Round 14 DEF guarantee: a structural override (guaranteed inclusion),
-    # not a score multiplier -- proactively surfaces DEF a round before the
-    # Round 15 force-fill above kicks in, without distorting anyone else's
-    # composite score to do it.
+    # K/DEF requirement is now handled by _kdef_required_positions above
+    # (a hard pool restriction, not a guaranteed-inclusion nudge) -- see its
+    # docstring for why the softer version wasn't reliable.
     guaranteed = []
-    if (
-        round_num == total_rounds - 1
-        and roster is not None
-        and roster.position_counts.get("DEF", 0) == 0
-    ):
-        def_pool = available_df[available_df["position"] == "DEF"]
-        if not def_pool.empty:
-            guaranteed.append(def_pool.sort_values("composite_score", ascending=False).iloc[0])
 
     # Round 10+ high-contingency RB quota: same structural-override pattern
     # as the DEF guarantee above -- late-round WR mean projections routinely

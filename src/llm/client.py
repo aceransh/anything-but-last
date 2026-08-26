@@ -5,7 +5,7 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel, field_validator
 
-from src.engine.draft_math import POSITIONAL_TARGET
+from src.engine.draft_math_rb import POSITIONAL_TARGET
 
 MODEL_NAME = "gemini-3.6-flash"
 

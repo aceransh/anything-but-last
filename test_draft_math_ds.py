@@ -45,7 +45,7 @@ candidates_final = generate_pareto_candidate_stream(
 print(f"Round 15 (TE reopens): {[(c['player_name'], c['position']) for c in candidates_final]}")
 print("PASS: TE hard-cap logic still gates on TE_FINAL_ROUND_MAX only in the true final round (no crash).")
 
-# Rule 2: elite-tier QB1 (Rounds 1-6) permanently locks out a 2nd QB.
+# Rule 2: elite-tier QB1 (Rounds 1-9) permanently locks out a 2nd QB.
 roster3 = Roster()
 roster3.add_player("Josh Allen", "QB", round_num=2)
 drafted3 = {"Josh Allen"}
@@ -141,7 +141,7 @@ available = df[~_drafted_mask(df, drafted7)].copy()
 available["effective_points"] = available["projected_points"]
 available["std_dev"] = 20.0
 available = _apply_portfolio_impact(available, roster7, df)
-bench_te = available[available["player_name"] == "Oronde Gadsden II"].iloc[0]  # deep-bench TE, well below McBride/Gibbs
+bench_te = available[available["player_name"] == "Terrance Ferguson"].iloc[0]  # deep-bench TE, well below McBride/Gibbs
 assert roster7.open_slots()["FLEX"] == 0, "test setup assumption broken: FLEX should be full"
 print(f"\nDeep-bench TE (worse than both TE starter and FLEX) portfolio impact: dWP={bench_te['delta_win_prob_pct']}, dCeil={bench_te['delta_ceiling_pts']}")
 assert bench_te["delta_win_prob_pct"] == 0.0, "FAIL: a genuinely bench-only pickup should contribute 0 win-prob delta"

@@ -1,17 +1,31 @@
 """Draft valuation engine -- v2, RARC/Pareto architecture, FantasyPros (FP)
 data-source variant.
 
-Identical to draft_math.py in every function -- the only real difference is
-the default csv_path pointing at data/projections_fp.csv instead of
-data/projections.csv. Unlike the DraftSharks (DS) variant, FantasyPros'
-cheat-sheet page has no floor/ceiling columns (only a 1-5 star Upside/Bust
-rating, not a numeric variance input), so this variant keeps
-`_synthetic_std_dev` -- the same heuristic-variance proxy the default engine
-uses -- rather than swapping in a real-variance calc the way draft_math_ds.py
-does. `adp` here is FantasyPros' ECR (Expert Consensus Rank), used as a
-drop-in replacement for ADP: same shape (a rank ordering), so every existing
-ADP-based function (calculate_adp_std_dev, survival probability, reach
-penalty, dynamic baseline) runs unchanged.
+Nearly identical to draft_math_rb.py -- the default csv_path points at
+data/projections_fp.csv instead of data/projections_rb.csv. Unlike the
+DraftSharks (DS) variant, FantasyPros' cheat-sheet page has no floor/ceiling
+columns (only a 1-5 star Upside/Bust rating, not a numeric variance input),
+so this variant keeps `_synthetic_std_dev` -- the same heuristic-variance
+proxy the default engine uses -- rather than swapping in a real-variance
+calc the way draft_math_ds.py does.
+
+`adp` here is now genuine cross-platform Average Draft Position (see
+update_data_fantasypros.py's `fetch_real_adp()`), NOT FantasyPros' ECR --
+that was last session's design (ECR reused as an ADP proxy, since real ADP
+wasn't known to be gettable without a login). ECR turned out to be
+fetchable too (found by reading the "Real-Time ADP" page's own JS bundle --
+same consensus-rankings endpoint as ECR, just filtered to platform IDs
+instead of human analysts), which freed ECR to become its own separate
+`ecr` column instead of standing in for `adp`.
+
+**The one real logic difference from draft_math_rb.py**: `_label_candidates`
+adds an "Expert Buy-Low" tag when a player's ECR sits meaningfully better
+than their real ADP (`MARKET_EDGE_MIN_GAP`, see below) -- experts rating a
+player higher than the market is currently drafting them is exactly the
+"market inefficiency" this engine already exists to capture (see the
+untouched RARC description below), just surfaced as its own explicit
+signal now that ECR and ADP are no longer the same number. Deliberately
+tag-only, no scoring effect -- see `MARKET_EDGE_MIN_GAP`'s comment for why.
 
 Everything below this point is the unmodified v2 engine description:
 
@@ -91,12 +105,12 @@ KICKER_DEFENSE_ROUNDS_FROM_END = 2  # K/DEF invisible until the final 2 rounds
 # slot for lack of the engine ever surfacing the position.
 FINAL_ROUND_REQUIRED_SLOT_POSITIONS = ("QB", "RB", "WR", "TE", "K", "DEF")
 
-# Dynamic single-QB constraint: an elite-tier QB1 (drafted Rounds 1-6) means
+# Dynamic single-QB constraint: an elite-tier QB1 (drafted Rounds 1-9) means
 # a 2nd QB is locked out for the REST of the draft -- that draft capital
 # already bought a locked-in weekly starter, permanently. A late-round QB1
-# (Round 9+) has no such lock; a 2nd QB there is governed by the normal
+# (Round 10+) has no such lock; a 2nd QB there is governed by the normal
 # hard-cap-at-2 filter.
-QB1_ELITE_ROUND_CUTOFF = 6
+QB1_ELITE_ROUND_CUTOFF = 9
 
 ADP_FALLBACK = 999.0  # players with no meaningful ADP consensus: assume ~always available
 
@@ -229,7 +243,7 @@ W_REACH_PENALTY = 15.0
 # least HIGH_CONTINGENCY_MIN_SLOTS of the 8 stream slots once WR mean
 # projections start dominating late-round RARC and would otherwise crowd
 # every backup RB out of the payload entirely. This is a selection-stage
-# quota (like the Round 14 DEF guarantee below), not a score multiplier --
+# quota (like the K/DEF pre-final-round requirement below), not a score multiplier --
 # it doesn't touch anyone's composite_score.
 #
 # mu + CEILING_Z*std >= 1.3*mu  <=>  std/mu >= (1.3 - 1) / CEILING_Z, solved
@@ -260,7 +274,7 @@ def normalize_name(name: str) -> str:
     """Lowercase, strip punctuation (periods, apostrophes, hyphens, ...) and
     suffixes (Jr/Sr/II/III/IV/V), and collapse whitespace.
 
-    Applied identically to Sleeper pick metadata and projections.csv names so
+    Applied identically to Sleeper pick metadata and projections_rb.csv names so
     the two sides always compare as pure name-identity, regardless of minor
     punctuation formatting differences between the two sources.
     """
@@ -367,7 +381,7 @@ def _normal_cdf(x: float, mean: float = 0.0, std: float = 1.0) -> float:
 
 def _qb1_elite_locked(roster) -> bool:
     """True for the rest of the draft once QB1 was drafted in the Elite Tier
-    (Rounds 1-6) -- a 2nd QB is never recommended again after that.
+    (Rounds 1-9) -- a 2nd QB is never recommended again after that.
     """
     if roster is None:
         return False
@@ -422,6 +436,30 @@ def _final_round_required_positions(roster, round_num: int, total_rounds: int) -
     }
     if open_slots.get("FLEX", 0) > 0:
         required |= FLEX_ELIGIBLE
+    return required or None
+
+
+def _kdef_required_positions(roster, round_num: int, total_rounds: int) -> set | None:
+    """During the K/DEF unlock window but before the true final round, hard-
+    restrict the pool to whichever of K/DEF are still unfilled -- not just
+    the softer guaranteed-inclusion nudge this used to be. Needed because
+    _optimal_lineup_value deliberately excludes K/DEF from the win-
+    probability/ceiling model (weekly K/DEF scoring is treated as noise for
+    comparing team strength, a reasonable simplification on its own), which
+    as a side effect means neither position ever earns real dWP/dCeiling
+    credit for filling its own mandatory slot. A lone guaranteed-inclusion
+    candidate relying on RARC alone can lose a close composite_score race to
+    a deep-bench skill-position player -- real data drift exposed exactly
+    this. The true final round is already covered by
+    _final_round_required_positions; this covers the round(s) before it
+    within the same KICKER_DEFENSE_ROUNDS_FROM_END window, guaranteeing at
+    least one of K/DEF gets taken there so the other has the final round
+    free.
+    """
+    if roster is None or round_num >= total_rounds or not _kdef_unlocked(round_num, total_rounds):
+        return None
+    open_slots = roster.open_slots()
+    required = {position for position in ("K", "DEF") if open_slots.get(position, 0) > 0}
     return required or None
 
 
@@ -843,6 +881,7 @@ def _finalize_pareto_candidate(row) -> dict:
         "position": row["position"],
         "team": row.get("team", ""),
         "adp": None if pd.isna(row.get("adp")) else round(float(row["adp"]), 1),
+        "ecr": None if pd.isna(row.get("ecr")) else round(float(row["ecr"]), 1),
         "projected_points": round(float(row["projected_points"]), 1),
         "std_dev": round(float(row["std_dev"]), 1),
         "rarc_score": round(float(row["rarc_score"]), 1),
@@ -853,6 +892,18 @@ def _finalize_pareto_candidate(row) -> dict:
         "same_team_stack_penalty": round(float(row.get("same_team_stack_penalty", 0.0)), 2),
         "composite_score": round(float(row["composite_score"]), 2),
     }
+
+
+# How far ECR must sit ahead of real ADP (in ranks) before it's treated as a
+# genuine "experts value this player higher than the market" signal rather
+# than ordinary rank noise between two independently-computed rank orders.
+# Deliberately tag-only (see _label_candidates' docstring) rather than a
+# scored composite_score term: there's no backtested evidence yet for what
+# weight would actually be correct, and guessing one would reintroduce
+# exactly the kind of unvalidated arbitrary-weight problem the RARC rewrite
+# was built to eliminate (see module docstring). Revisit once this tag has
+# been observed across enough live drafts to judge whether it's meaningful.
+MARKET_EDGE_MIN_GAP = 15.0
 
 
 def _label_candidates(candidates: list, current_pick_no: int) -> None:
@@ -888,6 +939,9 @@ def _label_candidates(candidates: list, current_pick_no: int) -> None:
             tags.append("Reach Risk")
         elif adp is not None and adp - current_pick_no > 15:
             tags.append("Market Fall")
+        ecr = candidate.get("ecr")
+        if ecr is not None and adp is not None and (adp - ecr) >= MARKET_EDGE_MIN_GAP:
+            tags.append("Expert Buy-Low")
         if candidate.get("same_team_stack_penalty", 0.0) > 0:
             tags.append("Same-Team Stack Risk")
         if i == max_ceiling_idx:
@@ -920,7 +974,9 @@ def generate_pareto_candidate_stream(
 
     available_df = _filter_hard_capped_positions(available_df, roster, round_num, total_rounds)
 
-    required_positions = _final_round_required_positions(roster, round_num, total_rounds)
+    required_positions = _final_round_required_positions(
+        roster, round_num, total_rounds
+    ) or _kdef_required_positions(roster, round_num, total_rounds)
     if required_positions:
         forced_df = available_df[available_df["position"].isin(required_positions)]
         if not forced_df.empty:
@@ -959,19 +1015,10 @@ def generate_pareto_candidate_stream(
         - W_SAME_TEAM_STACK_PENALTY * available_df["same_team_stack_penalty"]
     )
 
-    # Round 14 DEF guarantee: a structural override (guaranteed inclusion),
-    # not a score multiplier -- proactively surfaces DEF a round before the
-    # Round 15 force-fill above kicks in, without distorting anyone else's
-    # composite score to do it.
+    # K/DEF requirement is now handled by _kdef_required_positions above
+    # (a hard pool restriction, not a guaranteed-inclusion nudge) -- see its
+    # docstring for why the softer version wasn't reliable.
     guaranteed = []
-    if (
-        round_num == total_rounds - 1
-        and roster is not None
-        and roster.position_counts.get("DEF", 0) == 0
-    ):
-        def_pool = available_df[available_df["position"] == "DEF"]
-        if not def_pool.empty:
-            guaranteed.append(def_pool.sort_values("composite_score", ascending=False).iloc[0])
 
     # Round 10+ high-contingency RB quota: same structural-override pattern
     # as the DEF guarantee above -- late-round WR mean projections routinely

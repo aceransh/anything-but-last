@@ -1,11 +1,17 @@
-"""Fetches FantasyPros consensus rankings (ECR) + PPR season projections and
-merges them into data/projections_fp.csv.
+"""Fetches FantasyPros consensus rankings (ECR), real cross-platform ADP, and
+PPR season projections, merging them into data/projections_fp.csv.
 
-Both live on FantasyPros' own backing JSON API (AWS API Gateway + CloudFront,
-per the response headers) rather than the rendered HTML pages:
-- `{RANKINGS_API_URL}` -- rank-only ECR (Expert Consensus Rank), used here as
-  a drop-in replacement for `adp` (see draft_math_fp.py's module docstring
-  for why that's a reasonable substitution).
+All three live on FantasyPros' own backing JSON API (AWS API Gateway +
+CloudFront, per the response headers) rather than the rendered HTML pages:
+- `{RANKINGS_API_URL}` -- called twice, with different `filters`/`type`
+  params (see `fetch_ecr()` and `fetch_real_adp()`): once for rank-only ECR
+  (Expert Consensus Rank), once for genuine cross-platform Average Draft
+  Position. Earlier this session ECR was reused as an `adp` proxy, since
+  real ADP wasn't known to be gettable without a login -- it turned out to
+  be gettable from this same endpoint all along (see `fetch_real_adp()`'s
+  docstring for how that was found), which frees ECR to be its own column
+  instead. See draft_math_fp.py's module docstring for how the two are used
+  differently downstream.
 - `{PROJECTIONS_API_URL}` -- full PPR season point projections per position,
   including `points_ppr` and a real team code for every position (DST
   included -- the old HTML scrape had no team code on DST rows at all).
@@ -64,6 +70,18 @@ API_POSITION_CODES = {"QB": "QB", "RB": "RB", "WR": "WR", "TE": "TE", "K": "K", 
 # check like the old HTML-scrape version had.
 MIN_VALID_ROWS_PER_POSITION = 15
 
+# FantasyPros' "Real-Time ADP" page (fantasypros.com/nfl/real-time-adp/ppr)
+# is fully public -- no registration wall, unlike fantasypros.com/nfl/adp/
+# overall.php, which IS gated. Found by pulling that page's JS bundle and
+# reading the exact call it makes: the SAME consensus-rankings endpoint as
+# fetch_ecr(), just with a `filters` param selecting different "experts".
+# FantasyPros models each fantasy platform's own live-draft data as an
+# "expert" in their ranking system internally -- these three IDs (read
+# directly out of the bundle's expert-ID lookup table) are ESPN, Yahoo, and
+# Sleeper respectively. Filtering to just those turns the same `rank_ave`
+# field that's ECR for human analysts into genuine cross-platform ADP.
+REAL_ADP_EXPERT_FILTERS = "79:236:4350"
+
 HEADERS = {
     "x-api-key": X_API_KEY,
     "Origin": "https://www.fantasypros.com",
@@ -110,6 +128,42 @@ def fetch_ecr() -> dict:
     return ecr
 
 
+def fetch_real_adp() -> dict:
+    """Returns {(player_name, position): real_adp} -- genuine cross-platform
+    Average Draft Position, not an ECR-of-human-analysts proxy. Uses
+    `rank_ave` rather than `rank_ecr`: rank_ecr is a dense integer rank
+    (ties broken arbitrarily, e.g. two players tied on rank_ave both get
+    distinct consecutive rank_ecr values), while rank_ave is the actual
+    averaged decimal draft position -- the same shape as RotoBaller's/
+    DraftSharks' real `adp` columns elsewhere in this codebase.
+    """
+    params = {
+        "type": "adp",
+        "scoring": "PPR",
+        "position": "ALL",
+        "week": 0,
+        "filters": REAL_ADP_EXPERT_FILTERS,
+        "experts": "show",
+    }
+    response = requests.get(RANKINGS_API_URL, params=params, headers=HEADERS, timeout=15)
+    response.raise_for_status()
+    players = response.json()["players"]
+
+    if len(players) < MIN_VALID_ROWS_PER_POSITION:
+        raise FantasyProsAPIError(
+            f"FantasyPros real-ADP API returned only {len(players)} players -- "
+            "X_API_KEY may have rotated, or the ESPN/Yahoo/Sleeper expert IDs in "
+            "REAL_ADP_EXPERT_FILTERS changed. See this module's docstring for how "
+            "to recapture either from DevTools."
+        )
+
+    real_adp = {}
+    for player in players:
+        position = POSITION_ALIASES.get(player["player_position_id"], player["player_position_id"])
+        real_adp[(player["player_name"], position)] = player["rank_ave"]
+    return real_adp
+
+
 def fetch_projected_points(position: str) -> dict:
     """Returns {player_name: (projected_points, team)} for one position's
     full PPR season projections.
@@ -141,11 +195,20 @@ def fetch_projected_points(position: str) -> dict:
 
 
 def build_draft_board() -> pd.DataFrame:
-    """Fetches ECR + projected points for every position and merges them
-    into the same 5-column schema the default/DraftSharks engines use:
-    player_name, position, team, projected_points, adp (= ECR rank).
+    """Fetches ECR + real ADP + projected points for every position and
+    merges them into: player_name, position, team, projected_points, adp,
+    ecr. `adp` is genuine cross-platform ADP (fetch_real_adp); `ecr` is kept
+    as its own separate column rather than reused as an adp proxy -- see
+    draft_math_fp.py's module docstring for how the two get used
+    differently downstream (adp feeds the normal ADP-based math unchanged;
+    ecr only powers a descriptive "Expert Buy-Low" tag, no scoring effect).
+    A player can still be missing a real-ADP match even with an ECR match
+    (the platforms' live-draft data isn't guaranteed to cover every name on
+    the human-analyst consensus board) -- `adp` is left NaN for those rows,
+    which the engine already handles gracefully (`.fillna(ADP_FALLBACK)`).
     """
     ecr = fetch_ecr()
+    real_adp = fetch_real_adp()
 
     rows = []
     unmatched = 0
@@ -156,14 +219,15 @@ def build_draft_board() -> pd.DataFrame:
             if key not in ecr:
                 unmatched += 1
                 continue
-            _, adp = ecr[key]
+            _, ecr_rank = ecr[key]
             rows.append(
                 {
                     "player_name": name,
                     "position": position,
                     "team": team,
                     "projected_points": fpts,
-                    "adp": adp,
+                    "adp": real_adp.get(key, float("nan")),
+                    "ecr": ecr_rank,
                 }
             )
 

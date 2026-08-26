@@ -14,18 +14,18 @@ import requests
 # (verified directly against the live endpoint: 12 K + 16 DST rows, matching
 # the counts in the backup CSV too) -- an earlier version of this script
 # assumed it didn't and hard-filtered them out via VALID_POSITIONS, which is
-# why K/DEF rows previously had to be added to projections.csv by hand.
+# why K/DEF rows previously had to be added to projections_rb.csv by hand.
 LIVE_API_URL = "https://www.rotoballer.com/wp-json/rb/v1/rankings"
 LIVE_API_PARAMS = {"id": "265860", "spreadsheet": "ppr", "league": "Overall"}
 BACKUP_CSV_CANDIDATES = [
     "data/rotoballer-Overall-ppr-proj-rankings.csv",
     str(Path.home() / "Downloads" / "rotoballer-Overall-ppr-proj-rankings.csv"),
 ]
-OUTPUT_CSV = "data/projections.csv"
+OUTPUT_CSV = "data/projections_rb.csv"
 MIN_VALID_PLAYERS = 200
 VALID_POSITIONS = {"QB", "RB", "WR", "TE", "K", "DEF"}
 # RotoBaller uses "DST" for defenses; the rest of this codebase (Sleeper pick
-# metadata, roster.py, draft_math.py) uses "DEF" -- normalized here so every
+# metadata, roster.py, draft_math_rb.py) uses "DEF" -- normalized here so every
 # downstream consumer only ever sees one code.
 POSITION_ALIASES = {"DST": "DEF"}
 
@@ -43,7 +43,7 @@ TEAM_CORRECTIONS = {
 
 # RotoBaller's DST rows use "JAC" for Jacksonville while every player row
 # uses "JAX" -- normalized so within-file team matching (e.g. the same-team
-# stack penalty in draft_math.py) never silently misses a real match.
+# stack penalty in draft_math_rb.py) never silently misses a real match.
 TEAM_CODE_ALIASES = {
     "JAC": "JAX",
 }
@@ -88,6 +88,11 @@ def fetch_live() -> pd.DataFrame:
             "adp": record["industry_avg"],
         }
         for record in records
+        # A handful of deep-bench/rookie records (e.g. undrafted rookies RotoBaller
+        # hasn't modeled yet) carry "projections": null. Skipping just those rows
+        # (instead of letting one crash the whole fetch into the stale backup CSV
+        # fallback) is what actually keeps this on the live data path.
+        if record["player"]["projections"] is not None
     ]
     table = pd.DataFrame(rows)
     return normalize(table, "player_name", "position", "team", "projected_points", "adp")

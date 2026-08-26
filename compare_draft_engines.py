@@ -1,19 +1,22 @@
-"""Side-by-side comparison of all three engine variants -- the default
-(draft_math.py + data/projections.csv, RotoBaller-sourced), DraftSharks
+"""Side-by-side comparison of all four engine variants -- the default
+(draft_math_rb.py + data/projections_rb.csv, RotoBaller-sourced), DraftSharks
 (draft_math_ds.py + data/projections_ds.csv, real floor/ceiling variance),
-and FantasyPros (draft_math_fp.py + data/projections_fp.csv, ECR-as-ADP) --
-over three independent simulated 15-round, 12-team snake drafts.
+FantasyPros (draft_math_fp.py + data/projections_fp.csv, ECR-as-ADP), and
+Hybrid (draft_math_hybrid.py + data/projections_hybrid.csv, a local merge of
+the other three) -- over four independent simulated 15-round, 12-team snake
+drafts.
 
-Not a pass/fail test -- the three data sources have different ADP/points for
-the same players, so bot behavior (best-ADP-remaining) and my own picks will
+Not a pass/fail test -- the data sources have different ADP/points for the
+same players, so bot behavior (best-ADP-remaining) and my own picks will
 diverge for reasons beyond just the variance-model swap. This is a report,
-not a regression gate; read it as "how differently do these three produce a
+not a regression gate; read it as "how differently do these produce a
 draft," not "which one is more correct."
 
 Each simulation is a straight rerun of the logic in test_draft_simulation.py
-/ test_draft_simulation_ds.py / test_draft_simulation_fp.py, factored into
-one function so every engine runs through identical draft-loop mechanics
-(same slot, same round math) -- only the engine module and CSV differ.
+/ test_draft_simulation_ds.py / test_draft_simulation_fp.py /
+test_draft_simulation_hybrid.py, factored into one function so every engine
+runs through identical draft-loop mechanics (same slot, same round math) --
+only the engine module and CSV differ.
 
 The comparison logic below is engine-count-agnostic (loops over ENGINES
 rather than assuming exactly 2), so adding a 4th variant later is just
@@ -32,9 +35,10 @@ MY_SLOT = 1
 COL_WIDTH = 30
 
 ENGINES = [
-    ("Default (RotoBaller)", "src.engine.draft_math", "data/projections.csv"),
+    ("Default (RotoBaller)", "src.engine.draft_math_rb", "data/projections_rb.csv"),
     ("DraftSharks (DS)", "src.engine.draft_math_ds", "data/projections_ds.csv"),
     ("FantasyPros (FP)", "src.engine.draft_math_fp", "data/projections_fp.csv"),
+    ("Hybrid", "src.engine.draft_math_hybrid", "data/projections_hybrid.csv"),
 ]
 
 

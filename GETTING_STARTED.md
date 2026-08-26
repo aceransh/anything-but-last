@@ -32,7 +32,7 @@ Then open **<http://localhost:8000>** in your browser.
 
 1. Paste your **Sleeper draft ID** into the input box (see below for how to find it).
 2. Enter **your draft slot** — which pick position you are in the draft order (1st, 2nd, 3rd, etc.).
-3. Pick a **data source** — RotoBaller, DraftSharks, or FantasyPros (see [Data sources](#data-sources) below for what's different between them).
+3. Pick a **data source** — RotoBaller, DraftSharks, FantasyPros, or Hybrid (see [Data sources](#data-sources) below for what's different between them).
 4. Click **Connect Draft**.
 
 From there, the page updates itself automatically. You'll see:
@@ -66,18 +66,20 @@ Those two signals (plus that same-team check) get combined into one score per pl
 
 ## Data sources
 
-The app scores players using a local CSV file, not a live API call — that's deliberate, it's what keeps recommendations instant during your pick. There are three interchangeable sources, picked from the dropdown next to the draft ID field:
+The app scores players using a local CSV file, not a live API call — that's deliberate, it's what keeps recommendations instant during your pick. There are four interchangeable sources, picked from the dropdown next to the draft ID field:
 
-- **RotoBaller** (`data/projections.csv`) — the default/original source.
+- **RotoBaller** (`data/projections_rb.csv`) — the default/original source.
 - **DraftSharks** (`data/projections_ds.csv`) — publishes real floor/ceiling projections per player, used here as an actual measured risk signal instead of an estimated one.
-- **FantasyPros** (`data/projections_fp.csv`) — expert-consensus rankings + PPR projections.
+- **FantasyPros** (`data/projections_fp.csv`) — real cross-platform Average Draft Position (pulled from ESPN/Yahoo/Sleeper's own live drafts, not just human-analyst opinion) plus PPR projections. This is the only source with a second, separate signal: when FantasyPros' own expert consensus rank thinks a player is meaningfully better than where the market is actually drafting them, you'll see an **"Expert Buy-Low"** tag on that candidate.
+- **Hybrid** (`data/projections_hybrid.csv`) — a local merge of the other three: median projected points across whichever sources have a player, real ADP consensus (falling back to FantasyPros' expert rank only when neither RotoBaller nor DraftSharks has ranked someone), and DraftSharks' real floor/ceiling risk data carried through wherever it's available. Refresh the other three first — this one doesn't hit the network itself, it just re-merges whatever's already on disk.
 
 Whichever CSV you're using only knows what was in it the last time it was refreshed. Before a draft, refresh whichever source you plan to use — either from the app itself (click **Refresh \<Source\> Data**, which appears next to the data-source dropdown once you've picked one) or from the command line:
 
 ```bash
-.venv/bin/python -m src.api.update_data              # RotoBaller
+.venv/bin/python -m src.api.update_data_rotoballer    # RotoBaller
 .venv/bin/python -m src.api.update_data_draftsharks   # DraftSharks
 .venv/bin/python -m src.api.update_data_fantasypros   # FantasyPros
+.venv/bin/python -m src.api.update_data_hybrid        # Hybrid (run after refreshing the other three)
 ```
 
 None of these need a login or an API key you have to set up yourself — refreshing is a single command (or button click) either way. Refreshing isn't automatic — run it whenever rankings feel stale, ideally right before each draft.
@@ -101,10 +103,12 @@ Manual regression scripts (not pytest — run directly):
 .venv/bin/python test_draft_simulation_ds.py   # same simulation, DraftSharks variant
 .venv/bin/python test_draft_math_fp.py         # same rules, FantasyPros variant
 .venv/bin/python test_draft_simulation_fp.py   # same simulation, FantasyPros variant
+.venv/bin/python test_draft_math_hybrid.py     # same rules, Hybrid variant
+.venv/bin/python test_draft_simulation_hybrid.py  # same simulation, Hybrid variant
 .venv/bin/python test_llm.py                   # real call to Gemini (needs GEMINI_API_KEY)
 .venv/bin/python test_api.py <draft_id>         # sanity-checks the Sleeper API wrapper
 ```
 
-Run the math/simulation pair for whichever engine(s) you touched. `compare_draft_engines.py` (also run directly, no args) is a non-pass/fail report — runs all three engines' independent 15-round simulations and prints how differently they draft, not a regression gate. See [Data sources](#data-sources) above for refreshing each engine's CSV.
+Run the math/simulation pair for whichever engine(s) you touched. `compare_draft_engines.py` (also run directly, no args) is a non-pass/fail report — runs all four engines' independent 15-round simulations and prints how differently they draft, not a regression gate. See [Data sources](#data-sources) above for refreshing each engine's CSV.
 
-For the full technical writeup of how the scoring engine works, see the [README](README.md#engineering-notes) and the comments in `src/engine/draft_math.py`.
+For the full technical writeup of how the scoring engine works, see the [README](README.md#engineering-notes) and the comments in `src/engine/draft_math_rb.py`.

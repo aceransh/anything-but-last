@@ -17,7 +17,7 @@ class Roster:
     def __init__(self):
         self.slots = {position: [] for position in ROSTER_SLOTS}
         self.position_counts: dict = {}
-        # First round each position was drafted in -- lets draft_math apply
+        # First round each position was drafted in -- lets draft_math_rb apply
         # round-dependent logic like the elite-vs-late-round QB1 constraint.
         self.position_first_round: dict = {}
 

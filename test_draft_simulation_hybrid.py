@@ -1,15 +1,10 @@
-"""Simulated 15-round, 12-team snake draft to verify the RARC/Pareto engine
-produces a legally-constructed roster (hard caps respected, all starting
-slots filled) with zero positional oversaturation.
-
-My team (slot 1) always takes the engine's own top-composite-score stream
-pick -- the simplest possible policy. Bot teams draft the single best-ADP
-remaining player, position-agnostic, which is what actually drives the
-WR-run/TE-run scarcity dynamics this engine has to survive.
+"""Hybrid variant of test_draft_simulation.py -- same simulated 15-round,
+12-team snake draft, but driving draft_math_hybrid.py against
+data/projections_hybrid.csv instead of the default engine/CSV pair.
 """
 
 from src.engine.draft_state import compute_pick_slot, picks_until_my_turn
-from src.engine.draft_math_rb import (
+from src.engine.draft_math_hybrid import (
     generate_pareto_candidate_stream,
     load_projections,
     normalize_name,
@@ -20,7 +15,7 @@ TEAMS = 12
 TOTAL_ROUNDS = 15
 TOTAL_PICKS = TEAMS * TOTAL_ROUNDS
 MY_SLOT = 1
-CSV_PATH = "data/projections_rb.csv"
+CSV_PATH = "data/projections_hybrid.csv"
 
 projections = load_projections(CSV_PATH)
 bot_pool = projections.sort_values("adp").to_dict("records")
@@ -60,7 +55,7 @@ for pick_no in range(1, TOTAL_PICKS + 1):
 
     drafted_names.add((normalize_name(name), position))
 
-print("=== My draft picks ===")
+print("=== My draft picks (Hybrid engine) ===")
 for pick_no, name, position in my_picks:
     round_num = (pick_no - 1) // TEAMS + 1
     print(f"  R{round_num:>2} (pick {pick_no:>3}): {name} ({position})")
@@ -98,4 +93,4 @@ for label, passed, detail in checks:
 if not all_passed:
     raise SystemExit("SIMULATION FAILED: roster construction is not balanced")
 
-print("\nSIMULATION PASSED: balanced Hero RB / PPR structure, zero positional over-saturation.")
+print("\nSIMULATION PASSED (Hybrid engine): balanced Hero RB / PPR structure, zero positional over-saturation.")
