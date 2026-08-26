@@ -1,17 +1,29 @@
-"""Fetches FantasyPros consensus rankings (ECR), real cross-platform ADP, and
-PPR season projections, merging them into data/projections_fp.csv.
+"""Fetches FantasyPros consensus rankings (ECR), real cross-platform "Real-
+Time ADP", and PPR season projections, merging them into
+data/projections_fp.csv.
 
-All three live on FantasyPros' own backing JSON API (AWS API Gateway +
+All three live on FantasyPros' own backing JSON APIs (AWS API Gateway +
 CloudFront, per the response headers) rather than the rendered HTML pages:
-- `{RANKINGS_API_URL}` -- called twice, with different `filters`/`type`
-  params (see `fetch_ecr()` and `fetch_real_adp()`): once for rank-only ECR
-  (Expert Consensus Rank), once for genuine cross-platform Average Draft
-  Position. Earlier this session ECR was reused as an `adp` proxy, since
-  real ADP wasn't known to be gettable without a login -- it turned out to
-  be gettable from this same endpoint all along (see `fetch_real_adp()`'s
-  docstring for how that was found), which frees ECR to be its own column
-  instead. See draft_math_fp.py's module docstring for how the two are used
+- `{RANKINGS_API_URL}` -- rank-only ECR (Expert Consensus Rank). Earlier
+  this session ECR was reused as an `adp` proxy, since real ADP wasn't
+  known to be gettable without a login -- it's now its own separate
+  column; see draft_math_fp.py's module docstring for how the two are used
   differently downstream.
+- `{REAL_TIME_ADP_URL}` -- genuine cross-platform Average Draft Position,
+  on a DIFFERENT host (`partners.fantasypros.com`, not `api.fantasypros.com`)
+  than everything else here, found by reading the "Real-Time ADP" page's
+  own JS bundle (`fantasypros.com/nfl/real-time-adp/ppr`). An earlier
+  version of `fetch_real_adp()` called `{RANKINGS_API_URL}` filtered to
+  ESPN/Yahoo/Sleeper's "expert" IDs -- that produced real-looking but
+  materially wrong numbers (Yahoo's data wasn't even populated for most
+  players, so it was silently just an ESPN/Sleeper average) because the
+  page's actual "REAL-TIME" column reads a field (`rank_adp_raw`) that only
+  exists in THIS endpoint's response, not the rankings one. This one
+  blends 5 platforms (ESPN/CBS/RTSports/Fantrax/Sleeper, per its own
+  `available_adp` field) with real recency-weighting (`rank_last_seven`/
+  `rank_last_one` show the same field at different lookback windows --
+  the literal source of the page's TREND columns), which is a materially
+  different (and better) number than a flat expert-ID-filtered average.
 - `{PROJECTIONS_API_URL}` -- full PPR season point projections per position,
   including `points_ppr` and a real team code for every position (DST
   included -- the old HTML scrape had no team code on DST rows at all).
@@ -72,15 +84,17 @@ MIN_VALID_ROWS_PER_POSITION = 15
 
 # FantasyPros' "Real-Time ADP" page (fantasypros.com/nfl/real-time-adp/ppr)
 # is fully public -- no registration wall, unlike fantasypros.com/nfl/adp/
-# overall.php, which IS gated. Found by pulling that page's JS bundle and
-# reading the exact call it makes: the SAME consensus-rankings endpoint as
-# fetch_ecr(), just with a `filters` param selecting different "experts".
-# FantasyPros models each fantasy platform's own live-draft data as an
-# "expert" in their ranking system internally -- these three IDs (read
-# directly out of the bundle's expert-ID lookup table) are ESPN, Yahoo, and
-# Sleeper respectively. Filtering to just those turns the same `rank_ave`
-# field that's ECR for human analysts into genuine cross-platform ADP.
-REAL_ADP_EXPERT_FILTERS = "79:236:4350"
+# overall.php, which IS gated. Its own JS bundle revealed the actual data
+# flow: the page reads two API responses, keyed together by player_id. One
+# is {RANKINGS_API_URL} (same as fetch_ecr()) for the per-platform ESPN/
+# Yahoo/Sleeper individual-rank columns only. The other -- this one -- is
+# what the page's main "REAL-TIME" column and TREND columns actually read
+# from (`rank_adp_raw`, `rank_last_seven`, `rank_last_one`), on a DIFFERENT
+# host entirely. `id=7556` is FantasyPros' internal ID for this specific
+# blended feed (named "Real-Time ADP" right in its own response) -- found
+# by reading the bundle's row-mapping code, not any public documentation.
+REAL_TIME_ADP_URL = "https://partners.fantasypros.com/api/v1/expert-rankings.php"
+REAL_TIME_ADP_EXPERT_ID = "7556"
 
 HEADERS = {
     "x-api-key": X_API_KEY,
@@ -130,37 +144,47 @@ def fetch_ecr() -> dict:
 
 def fetch_real_adp() -> dict:
     """Returns {(player_name, position): real_adp} -- genuine cross-platform
-    Average Draft Position, not an ECR-of-human-analysts proxy. Uses
-    `rank_ave` rather than `rank_ecr`: rank_ecr is a dense integer rank
-    (ties broken arbitrarily, e.g. two players tied on rank_ave both get
-    distinct consecutive rank_ecr values), while rank_ave is the actual
-    averaged decimal draft position -- the same shape as RotoBaller's/
-    DraftSharks' real `adp` columns elsewhere in this codebase.
+    Average Draft Position (ESPN/CBS/RTSports/Fantrax/Sleeper, per this
+    response's own `available_adp` field -- confirmed by inspecting a live
+    response, not documented anywhere), not an ECR-of-human-analysts proxy.
+
+    Uses `rank_adp_raw` (a real decimal draft position, e.g. "1.30"),
+    falling back to the integer `rank` field for the rare row missing it --
+    mirroring the Real-Time ADP page's own row-mapping code exactly
+    (`adp: parseFloat(e.rank_adp_raw) || parseInt(e.rank)`), found by
+    reading that page's JS bundle. This is deliberately NOT `fetch_ecr()`'s
+    endpoint filtered to different experts (an earlier version of this
+    function did that, using `rank_ave`) -- that produced real-looking but
+    wrong numbers, because Yahoo's data wasn't even populated for most
+    players in that response, silently collapsing to just an ESPN/Sleeper
+    average. This endpoint is the actual source of the page's "REAL-TIME"
+    column; verified directly against it (e.g. Jahmyr Gibbs 1.30, Bijan
+    Robinson 2.20 -- matching the live page to one decimal place).
     """
     params = {
+        "id": REAL_TIME_ADP_EXPERT_ID,
+        "year": YEAR,
+        "position": "ALL",
         "type": "adp",
         "scoring": "PPR",
-        "position": "ALL",
-        "week": 0,
-        "filters": REAL_ADP_EXPERT_FILTERS,
-        "experts": "show",
     }
-    response = requests.get(RANKINGS_API_URL, params=params, headers=HEADERS, timeout=15)
+    response = requests.get(REAL_TIME_ADP_URL, params=params, headers=HEADERS, timeout=15)
     response.raise_for_status()
     players = response.json()["players"]
 
     if len(players) < MIN_VALID_ROWS_PER_POSITION:
         raise FantasyProsAPIError(
-            f"FantasyPros real-ADP API returned only {len(players)} players -- "
-            "X_API_KEY may have rotated, or the ESPN/Yahoo/Sleeper expert IDs in "
-            "REAL_ADP_EXPERT_FILTERS changed. See this module's docstring for how "
-            "to recapture either from DevTools."
+            f"FantasyPros Real-Time ADP API returned only {len(players)} players -- "
+            "X_API_KEY may have rotated, or REAL_TIME_ADP_EXPERT_ID changed. See "
+            "this module's docstring for how to recapture either from DevTools."
         )
 
     real_adp = {}
     for player in players:
-        position = POSITION_ALIASES.get(player["player_position_id"], player["player_position_id"])
-        real_adp[(player["player_name"], position)] = player["rank_ave"]
+        position = POSITION_ALIASES.get(player["player_positions"], player["player_positions"])
+        raw = player.get("rank_adp_raw")
+        adp = float(raw) if raw not in (None, "") else float(player["rank"])
+        real_adp[(player["player_name"], position)] = adp
     return real_adp
 
 
