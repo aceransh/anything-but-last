@@ -13,9 +13,10 @@ from src.api import (
     update_data_draftsharks,
     update_data_fantasypros,
     update_data_hybrid,
+    update_data_sl,
 )
 from src.api.sleeper import get_draft_picks, get_draft_status
-from src.engine import draft_math_rb, draft_math_ds, draft_math_fp, draft_math_hybrid
+from src.engine import draft_math_rb, draft_math_ds, draft_math_fp, draft_math_hybrid, draft_math_sl
 from src.engine.draft_state import compute_pick_slot, format_pick_alert, picks_until_my_turn
 from src.engine.roster import ROSTER_SLOTS, Roster
 from src.llm.client import (
@@ -32,7 +33,7 @@ logger = logging.getLogger(__name__)
 # fresher data on its own -- but the prior near/far adaptive split wasn't
 # working well in practice, so this reverts to a simple constant interval.
 POLL_INTERVAL_SECONDS = 1
-# Runtime-selectable data sources -- all three engine modules export the
+# Runtime-selectable data sources -- all five engine modules export the
 # same three functions (get_drafted_names, detect_roster_archetype,
 # generate_pareto_candidate_stream) with identical signatures, so swapping
 # is a genuine drop-in: {key: (module, csv_path)}. Key is whatever the
@@ -42,6 +43,7 @@ DATA_SOURCES = {
     "draftsharks": (draft_math_ds, "data/projections_ds.csv"),
     "fantasypros": (draft_math_fp, "data/projections_fp.csv"),
     "hybrid": (draft_math_hybrid, "data/projections_hybrid.csv"),
+    "sleeper": (draft_math_sl, "data/projections_sl.csv"),
 }
 DEFAULT_DATA_SOURCE = "fantasypros"
 LOG_FILE = "draft.log"
@@ -518,6 +520,39 @@ def refresh_hybrid() -> dict:
     csv_path = DATA_SOURCES["hybrid"][1]
     df.to_csv(csv_path, index=False)
     draft_math_hybrid._league_baseline_lineup.cache_clear()
+
+    return {
+        "success": True,
+        "player_count": len(df),
+        "by_position": df["position"].value_counts().to_dict(),
+    }
+
+
+@app.post("/api/sleeper/refresh")
+def refresh_sleeper() -> dict:
+    """Fetches fresh projections from Sleeper's own public projections
+    endpoint and rewrites data/projections_sl.csv in place. Same
+    trigger/response shape as the DraftSharks refresh above.
+    """
+    try:
+        df = update_data_sl.fetch_all()
+    except Exception as exc:
+        logger.warning("Sleeper refresh failed: %s", exc)
+        return {"success": False, "error": f"Fetch failed: {exc}"}
+
+    if len(df) < update_data_sl.MIN_VALID_PLAYERS:
+        return {
+            "success": False,
+            "error": (
+                f"Only parsed {len(df)} valid players "
+                f"(< {update_data_sl.MIN_VALID_PLAYERS}); "
+                "Sleeper's projections endpoint likely changed shape."
+            ),
+        }
+
+    csv_path = DATA_SOURCES["sleeper"][1]
+    df.to_csv(csv_path, index=False)
+    draft_math_sl._league_baseline_lineup.cache_clear()
 
     return {
         "success": True,

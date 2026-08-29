@@ -1,15 +1,12 @@
-"""Hybrid variant of test_draft_math.py -- verifies draft_math_hybrid.py
-against data/projections_hybrid.csv. Rules 1-4 and 6-14 mirror
-test_draft_math.py's base suite unchanged. Rule 5 is rewritten for the
-new 3-tier variance blend (`_hybrid_variance`), and two new Hybrid-specific
-rules are appended (15: dual-track ADP -- survival tracks adp_local, reach
-tracks adp_global; 16: the ported Expert Buy-Low tag) -- see
-draft_math_hybrid.py's module docstring for the full architecture this
-verifies, per the "Architectural Evaluation and Hybrid Engine Design"
-research PDF this session's rewrite implements.
+"""Sleeper (SL) variant of test_draft_math.py -- verifies draft_math_sl.py
+against data/projections_sl.csv. Rule-for-rule identical to test_draft_math.py
+(unlike test_draft_math_ds.py, which swaps Rule 5 for a real-std-dev check):
+draft_math_sl.py's only real difference from draft_math_rb.py is the default CSV
+path, so it keeps the same _synthetic_std_dev heuristic and every other rule
+applies unchanged. See draft_math_sl.py's module docstring for why.
 """
 
-from src.engine.draft_math_hybrid import (
+from src.engine.draft_math_sl import (
     ADP_FALLBACK,
     RB_DEAD_ZONE_ADP_END,
     RB_DEAD_ZONE_ADP_START,
@@ -96,60 +93,23 @@ sigma_late = calculate_adp_std_dev(150.0)
 assert sigma_late > sigma_early, "FAIL: ADP std dev should grow with pick depth"
 print(f"\nPASS: ADP std dev grows with draft depth (pick 5: {sigma_early:.2f}, pick 150: {sigma_late:.2f}).")
 
-# Rule 5 (Hybrid-specific, rewritten): _hybrid_variance's 3-tier blend --
-# full DS+cross+synth blend when source_count>=2 and DraftSharks
-# floor/ceiling are present; cross+synth reweighted blend when
-# source_count>=2 but DraftSharks is absent; pure synthetic when
-# source_count==1, even if DraftSharks floor/ceiling happen to be present
-# (matches the PDF's branch structure exactly -- see draft_math_hybrid.py's
-# _hybrid_variance docstring for why that edge case is intentional).
-import math
+# Rule 5: Dead Zone RB volatility -- an RB with ADP inside the Dead Zone
+# window gets a materially higher synthetic std_dev (as a % of points) than
+# a similarly-projected WR, reflecting the documented RB Dead Zone bust rate.
+from src.engine.draft_math_sl import _synthetic_std_dev
 
-from src.engine.draft_math_hybrid import (
-    CEILING_Z,
-    W_HYBRID_CROSS,
-    W_HYBRID_CROSS_NO_DS,
-    W_HYBRID_DS,
-    W_HYBRID_SYNTH,
-    W_HYBRID_SYNTH_NO_DS,
-    _hybrid_variance,
-    _synthetic_std_dev,
-)
-
-full_row = {
-    "position": "RB", "adp_global": 50.0, "projected_points": 200.0,
-    "source_count": 3, "sigma_cross": 15.0, "floor_points": 100.0, "ceiling_points": 300.0,
-}
-sigma_ds = (300.0 - 100.0) / (2 * CEILING_Z)
-sigma_synth_full = _synthetic_std_dev(full_row)
-expected_full = math.sqrt(W_HYBRID_DS * sigma_ds**2 + W_HYBRID_CROSS * 15.0**2 + W_HYBRID_SYNTH * sigma_synth_full**2)
-actual_full = _hybrid_variance(full_row)
-assert abs(actual_full - expected_full) < 1e-6, f"FAIL: full 3-tier blend mismatch, got {actual_full} vs expected {expected_full}"
-print(f"\nPASS: 3-tier blend (DS+cross+synth) matches the weighted formula exactly ({actual_full:.2f}).")
-
-no_ds_row = {
-    "position": "WR", "adp_global": 50.0, "projected_points": 200.0,
-    "source_count": 2, "sigma_cross": 12.0, "floor_points": float("nan"), "ceiling_points": float("nan"),
-}
-sigma_synth_no_ds = _synthetic_std_dev(no_ds_row)
-expected_no_ds = math.sqrt(W_HYBRID_CROSS_NO_DS * 12.0**2 + W_HYBRID_SYNTH_NO_DS * sigma_synth_no_ds**2)
-actual_no_ds = _hybrid_variance(no_ds_row)
-assert abs(actual_no_ds - expected_no_ds) < 1e-6, f"FAIL: no-DS 2-tier blend mismatch, got {actual_no_ds} vs expected {expected_no_ds}"
-print(f"PASS: 2-tier blend (cross+synth, no DraftSharks) matches the reweighted formula exactly ({actual_no_ds:.2f}).")
-
-single_source_row = {
-    "position": "RB", "adp_global": 50.0, "projected_points": 200.0,
-    "source_count": 1, "sigma_cross": float("nan"), "floor_points": 100.0, "ceiling_points": 300.0,
-}
-expected_single = _synthetic_std_dev(single_source_row)
-actual_single = _hybrid_variance(single_source_row)
-assert abs(actual_single - expected_single) < 1e-9, f"FAIL: source_count==1 should fall back to pure synthetic regardless of DS presence, got {actual_single} vs expected {expected_single}"
-print(f"PASS: source_count==1 falls back to pure synthetic variance, matching the PDF's branch structure exactly ({actual_single:.2f}).")
+dead_zone_adp = (RB_DEAD_ZONE_ADP_START + RB_DEAD_ZONE_ADP_END) / 2
+rb_row = {"position": "RB", "adp": dead_zone_adp, "projected_points": 200.0}
+wr_row = {"position": "WR", "adp": dead_zone_adp, "projected_points": 200.0}
+rb_std = _synthetic_std_dev(rb_row)
+wr_std = _synthetic_std_dev(wr_row)
+assert rb_std > wr_std, f"FAIL: Dead Zone RB std_dev ({rb_std}) should exceed a same-projection WR's ({wr_std})"
+print(f"PASS: Dead Zone RB volatility ({rb_std:.1f}) exceeds a same-projection WR's ({wr_std:.1f}).")
 
 # Rule 6: reach penalty is continuous, not an instant max-out -- a mild
 # (~1 pick) early selection should score much lower than a severe
 # (~10+ round) reach.
-from src.engine.draft_math_hybrid import REACH_PENALTY_CAP, _reach_penalty
+from src.engine.draft_math_sl import REACH_PENALTY_CAP, _reach_penalty
 
 sigma = calculate_adp_std_dev(50.0)
 mild_reach = _reach_penalty(adp=51.0, sigma_adp=sigma, current_pick_no=50)
@@ -164,7 +124,7 @@ print("PASS: reach penalty scales continuously with reach severity instead of sa
 # starter at every slot they're eligible for (own position AND FLEX) can't
 # crack the optimal lineup, so contributes zero to both
 # delta_win_prob_pct and delta_ceiling_pts.
-from src.engine.draft_math_hybrid import _apply_portfolio_impact, _drafted_mask, _filter_hard_capped_positions
+from src.engine.draft_math_sl import _apply_portfolio_impact, _drafted_mask, _filter_hard_capped_positions
 
 roster7 = Roster()
 roster7.add_player("Trey McBride", "TE", round_num=9)  # strong TE fills the TE slot
@@ -188,7 +148,8 @@ print("PASS: a player who can't crack the optimal lineup contributes zero margin
 # current FLEX occupant (or any starter at their own position) correctly
 # gets full starter credit instead of being evaluated as a bench asset,
 # even if a literal draft-order slot assignment would've stuck them on the
-# bench.
+# bench. This is the "Deebo Samuel benched behind a worse FLEX starter" bug
+# the greedy optimizer exists to fix.
 roster7b = Roster()
 roster7b.add_player("Bijan Robinson", "RB", round_num=1)
 roster7b.add_player("Jahmyr Gibbs", "RB", round_num=2)
@@ -207,7 +168,7 @@ print("PASS: the greedy optimizer correctly gives full starter credit to a candi
 
 # Rule 8: Pareto frontier -- a strictly dominated player (worse on both RARC
 # and ceiling delta than another) is excluded from the frontier.
-from src.engine.draft_math_hybrid import _pareto_frontier
+from src.engine.draft_math_sl import _pareto_frontier
 import pandas as pd
 
 frontier_input = pd.DataFrame([
@@ -224,7 +185,7 @@ print("PASS: strictly-dominated candidates are excluded from the Pareto frontier
 
 # Rule 9: opponent positional demand -- a team's own drafted picks
 # correctly determine which starting positions they still need.
-from src.engine.draft_math_hybrid import _team_open_starter_needs
+from src.engine.draft_math_sl import _team_open_starter_needs
 
 fake_picks = [
     {"draft_slot": 3, "pick_no": 3, "metadata": {"first_name": "Josh", "last_name": "Allen", "position": "QB"}},
@@ -270,7 +231,7 @@ print("PASS: full pipeline returns a fast, positionally-varied Pareto candidate 
 # 85th-percentile ceiling clears HIGH_CONTINGENCY_CEILING_MULTIPLIER x
 # their own median, even though WR mean projections would otherwise crowd
 # every backup RB out of a pure-RARC-ranked late-round stream.
-from src.engine.draft_math_hybrid import HIGH_CONTINGENCY_MIN_SLOTS, HIGH_CONTINGENCY_ROUND_START
+from src.engine.draft_math_sl import HIGH_CONTINGENCY_MIN_SLOTS, HIGH_CONTINGENCY_ROUND_START
 
 top132 = df_full.sort_values("adp").head(132)
 drafted11 = {(normalize_name(n), p) for n, p in zip(top132["player_name"], top132["position"])}
@@ -294,7 +255,10 @@ print(f"PASS: at least {HIGH_CONTINGENCY_MIN_SLOTS} High-Contingency RBs guarant
 
 # Rule 12: the returned candidate stream is genuinely sorted best-first by
 # composite_score, even when guaranteed-inclusion picks (Round 10+
-# high-contingency RBs here) score far below the frontier.
+# high-contingency RBs here) score far below the frontier -- a real bug
+# previously let those low-score guaranteed picks sit at index 0 just
+# because they were added to the selection first, which silently broke
+# fallback_recommendation() (see Rule 13) whenever Gemini failed.
 scores11 = [c["composite_score"] for c in candidates11]
 assert scores11 == sorted(scores11, reverse=True), (
     f"FAIL: candidate stream is not sorted best-first by composite_score: {scores11}"
@@ -303,7 +267,9 @@ print(f"\nCandidate stream composite scores (should be descending): {scores11}")
 print("PASS: candidate stream is genuinely sorted best-first, including guaranteed-inclusion picks.")
 
 # Rule 13: fallback_recommendation() picks the actual highest composite_score
-# candidate, not just whatever happens to be first in the list.
+# candidate, not just whatever happens to be first in the list -- verified
+# directly against a deliberately-unsorted input so this test can't pass by
+# accident even if Rule 12's sort were ever removed.
 from src.llm.client import fallback_recommendation
 
 shuffled = [candidates11[-1], candidates11[0], candidates11[len(candidates11) // 2]]
@@ -320,7 +286,7 @@ print("PASS: fallback_recommendation is robust to input order and always picks t
 # Rule 14: same-team non-QB stack penalty -- WR+WR (same team) gets the
 # largest penalty, WR+TE a smaller one, RB pairings and QB stacks get none
 # at all (a QB+same-team pass-catcher is a deliberate, desired strategy).
-from src.engine.draft_math_hybrid import (
+from src.engine.draft_math_sl import (
     SAME_TEAM_WR_TE_PENALTY,
     SAME_TEAM_WR_WR_PENALTY,
     _rostered_team_positions,
@@ -343,84 +309,3 @@ assert rb_penalty == 0.0, f"FAIL: RB pairings should never be penalized (not a r
 assert qb_penalty == 0.0, f"FAIL: QB stacks should never be penalized (deliberate positive-correlation strategy), got {qb_penalty}"
 assert other_team_penalty == 0.0, f"FAIL: a different-team WR should get no stack penalty, got {other_team_penalty}"
 print("PASS: same-team stack penalty correctly ranks WR+WR > WR+TE > 0, and never penalizes RB pairings or QB stacks.")
-
-# Rule 15 (Hybrid-specific): dual-track ADP, verified end-to-end through the
-# real generate_pareto_candidate_stream pipeline (not just the underlying
-# formulas in isolation) -- survival probability tracks adp_local, and
-# reach_penalty tracks adp_global. A small controlled fixture CSV isolates
-# each track: two WR rows share adp_global but differ in adp_local (should
-# yield different survival), and two RB rows share adp_local but differ in
-# adp_global (should yield different reach_penalty).
-import os
-import tempfile
-
-fixture_rows = [
-    {
-        "player_name": "Local Early", "position": "WR", "team": "AAA", "projected_points": 100.0,
-        "source_count": 1, "sigma_cross": float("nan"), "adp": 50.0, "adp_local": 10.0, "adp_global": 50.0,
-        "ecr": float("nan"), "floor_points": float("nan"), "ceiling_points": float("nan"),
-    },
-    {
-        "player_name": "Local Late", "position": "WR", "team": "BBB", "projected_points": 100.0,
-        "source_count": 1, "sigma_cross": float("nan"), "adp": 50.0, "adp_local": 90.0, "adp_global": 50.0,
-        "ecr": float("nan"), "floor_points": float("nan"), "ceiling_points": float("nan"),
-    },
-    {
-        "player_name": "Global Early", "position": "RB", "team": "CCC", "projected_points": 100.0,
-        "source_count": 1, "sigma_cross": float("nan"), "adp": 10.0, "adp_local": 40.0, "adp_global": 10.0,
-        "ecr": float("nan"), "floor_points": float("nan"), "ceiling_points": float("nan"),
-    },
-    {
-        "player_name": "Global Late", "position": "RB", "team": "DDD", "projected_points": 100.0,
-        "source_count": 1, "sigma_cross": float("nan"), "adp": 120.0, "adp_local": 40.0, "adp_global": 120.0,
-        "ecr": float("nan"), "floor_points": float("nan"), "ceiling_points": float("nan"),
-    },
-]
-fixture_df = pd.DataFrame(fixture_rows)
-with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as tmp:
-    fixture_df.to_csv(tmp.name, index=False)
-    tmp_path = tmp.name
-
-try:
-    candidates15 = generate_pareto_candidate_stream(
-        drafted_player_names=set(), csv_path=tmp_path, roster=None, round_num=1,
-        total_rounds=15, current_pick_no=20, picks_until_next_turn=10,
-    )
-finally:
-    os.remove(tmp_path)
-
-by_name15 = {c["player_name"]: c for c in candidates15}
-survival_early = by_name15["Local Early"]["p_avail_next_turn_pct"]
-survival_late = by_name15["Local Late"]["p_avail_next_turn_pct"]
-print(f"\nSame adp_global (50), different adp_local (10 vs 90): survival {survival_early} vs {survival_late}")
-assert survival_early < survival_late, "FAIL: survival probability should track adp_local, not adp_global"
-
-reach_early = by_name15["Global Early"]["reach_penalty"]
-reach_late = by_name15["Global Late"]["reach_penalty"]
-print(f"Same adp_local (40), different adp_global (10 vs 120): reach_penalty {reach_early} vs {reach_late}")
-assert reach_early < reach_late, "FAIL: reach_penalty should track adp_global, not adp_local"
-print("PASS: dual-track ADP confirmed end-to-end -- survival tracks adp_local, reach_penalty tracks adp_global.")
-
-# Rule 16 (Hybrid-specific): the ported "Expert Buy-Low" tag fires under the
-# confirmed sign convention (adp_global - ecr >= MARKET_EDGE_MIN_GAP) --
-# matching the source PDF's own prose and the already-shipped FantasyPros
-# engine's tag, not the PDF's literal (self-contradicting) formula.
-from src.engine.draft_math_hybrid import MARKET_EDGE_MIN_GAP, _label_candidates
-
-buy_low_candidate = {
-    "player_name": "Value Merchant", "position": "WR", "adp": 60.0, "ecr": 40.0,
-    "projected_points": 150.0, "std_dev": 20.0, "rarc_score": 10.0,
-    "delta_ceiling_pts": 5.0, "reach_penalty": 0.0, "same_team_stack_penalty": 0.0,
-}
-no_edge_candidate = {
-    "player_name": "Fair Value", "position": "WR", "adp": 60.0, "ecr": 55.0,
-    "projected_points": 150.0, "std_dev": 20.0, "rarc_score": 10.0,
-    "delta_ceiling_pts": 5.0, "reach_penalty": 0.0, "same_team_stack_penalty": 0.0,
-}
-candidates16 = [dict(buy_low_candidate), dict(no_edge_candidate)]
-_label_candidates(candidates16, current_pick_no=60)
-print(f"\nBuy-low gap (adp 60, ecr 40, gap=20 >= {MARKET_EDGE_MIN_GAP}): {candidates16[0]['strategic_profile']}")
-print(f"No edge (adp 60, ecr 55, gap=5 < {MARKET_EDGE_MIN_GAP}): {candidates16[1]['strategic_profile']}")
-assert "Expert Buy-Low" in candidates16[0]["strategic_profile"], f"FAIL: a {MARKET_EDGE_MIN_GAP}+ rank gap (adp_global - ecr) should trigger Expert Buy-Low"
-assert "Expert Buy-Low" not in candidates16[1]["strategic_profile"], "FAIL: a small adp_global-ecr gap should not trigger Expert Buy-Low"
-print("PASS: Expert Buy-Low tag fires on adp_global - ecr >= MARKET_EDGE_MIN_GAP, the confirmed sign convention.")
