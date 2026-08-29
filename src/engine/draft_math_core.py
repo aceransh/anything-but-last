@@ -1,115 +1,93 @@
-"""Hybrid variant of draft_math_rb.py -- scores against data/projections_hybrid.csv,
-a local merge of RotoBaller + DraftSharks + FantasyPros + Sleeper (see
-src/api/update_data_hybrid.py's module docstring for the exact merge rules).
+"""Shared RARC/Pareto draft valuation engine -- the logic behind
+draft_math_rb.py, draft_math_ds.py, draft_math_fp.py, and draft_math_sl.py.
 
-REWRITTEN this session per "Architectural Evaluation and Hybrid Engine
-Design for Real-Time Draft Optimization" (a research PDF the user supplied).
-Unlike the DS/FP/SL variants -- each a byte-for-byte duplicate of
-draft_math_rb.py except one function -- this file is now a genuine fork
-with real structural differences, because the PDF's central idea requires
-touching several call sites, not one. That idea: DECOUPLE MARKET-MECHANICS
-MODELING from PLAYER-EVALUATION/VARIANCE MODELING. Concretely:
+Those four files used to each be a ~1000-line, near-byte-identical
+duplicate of one another (the DS/FP/SL variants were explicitly built as
+whole-file copies of the RB/default engine, differing in only one or two
+functions each). That was a deliberate choice at the time -- each variant
+self-contained, no cross-file coordination needed to reason about one of
+them. It stopped paying for itself the moment a fix needed to land in all
+four at once: every one of the three engine refinements made in one
+session (downside-only variance, the scarcity-aware demand boost, the QB1
+opportunity-cost override) had to be hand-propagated across all four files
+with matching scripts just to keep them in lockstep. This module is that
+consolidation -- everything that WAS identical across the four now lives
+here exactly once; each of the four thin per-source files supplies only
+what actually differs (a variance function, a default CSV path, and -- for
+FantasyPros only -- its own candidate finalize/label logic for the
+"Expert Buy-Low" tag).
 
-- **Dual-track ADP.** `adp_local` (Sleeper's own platform ADP -- the actual
-  room this app drafts in) exclusively drives survival-probability /
-  hazard-rate modeling in `_apply_rarc` (opponent behavior in THIS draft
-  room is governed by what Sleeper's own interface shows them, not a
-  third-party consensus). `adp_global` (FantasyPros' real cross-platform
-  ADP, falling back to `adp_local` then to a median(RB, DS) real-ADP
-  fallback -- see update_data_hybrid.py) exclusively drives the reach
-  penalty, the RB Dead-Zone/backup-RB ADP-band gating inside
-  `_synthetic_std_dev`, and the "Expert Buy-Low" tag in `_label_candidates`
-  -- all genuinely global-market concepts, where scoring a candidate
-  against Sleeper's own room-specific ADP would wrongly penalize a pick
-  that only looks early because of this one platform, not the real market.
-  Previously one blended `adp` field did both jobs.
-- **Three-tier variance blend** (`_hybrid_variance`, replacing
-  `_hybrid_std_dev`): DraftSharks floor/ceiling-derived sigma, cross-source
-  projection dispersion sigma (`sigma_cross`, precomputed in
-  update_data_hybrid.py from however many of the 4 sources have a
-  projection for a given player), and the existing synthetic heuristic,
-  blended by data-availability weights -- not just a binary
-  "real-if-DraftSharks-else-synthetic" switch.
-- **More precise CEILING_Z** (1.03643, the PDF's z-score for the 85th
-  percentile, vs. the other engines' rounded 1.04) -- applies to every use
-  of this constant in this file (the new sigma_DS term, the existing
-  ΔCeiling portfolio-impact calc, and HIGH_CONTINGENCY_STD_RATIO's
-  derivation).
+`draft_math_hybrid.py` is deliberately NOT part of this consolidation. It's
+a genuine fork now, not a config difference -- its dual-track ADP split
+(Sleeper's local ADP for survival probability, FantasyPros' global ADP for
+reach penalty/Dead-Zone banding/the Buy-Low tag) touches several call sites
+with real logic differences, not just a swapped-in function. Folding it
+into this shared core would force every other variant's code path to carry
+Hybrid-only branching it doesn't need. It stays a full standalone file.
 
-Three deliberate deviations from the PDF's literal design, confirmed with
-the user before implementing:
-1. Entity resolution (in update_data_hybrid.py) uses the existing zero-
-   dependency union-find matcher extended to 4 sources, not the PDF's
-   suggested RapidFuzz -- no new dependency added.
-2. The cross-source matching key is (name, position) only, NOT
-   (name, position, team) as the PDF's literal formula states -- avoids a
-   real correctness regression where a stale post-trade team code in one
-   source would silently split one player into two rows.
-3. The "Expert Buy-Low" sign convention is `adp_global - ecr >= tau_buy`
-   (matches both the PDF's own prose AND the already-shipped FantasyPros
-   engine's tag) rather than the PDF's literal formula
-   (`ecr - adp_global >= tau_buy`), which contradicts its own prose and
-   would flag the opposite signal.
-
-One more correctness fix, found during this rewrite and not addressed by
-the PDF at all: Sleeper's own ADP field uses a 999.0 "no consensus"
-sentinel (confirmed when building draft_math_sl.py -- it happens to
-coincide with this codebase's own ADP_FALLBACK=999.0). update_data_hybrid.py
-now cleans that sentinel to NaN before it ever reaches `adp_local`, the
-same way it already did for RotoBaller's 0.0 sentinel.
-
-Everything NOT described above (Pareto frontier, portfolio impact / greedy
-lineup optimizer, same-team stack penalty, hard roster-construction rules --
-QB1-elite lock, K/DEF force-fill, single-TE cap, high-contingency RB quota)
-is unchanged from draft_math_rb.py.
-
-Draft valuation engine -- v2, RARC/Pareto architecture.
-
-Replaces the earlier EVONA + static W_pos-multiplier engine (which
-multiplied a point-value score by arbitrary scalar weights -- 1.5x here,
-0.75x there -- destroying the metric's units and masking real market
-inefficiencies like an elite player free-falling past ADP) with:
+Everything below is unchanged math from the original v2 RARC/Pareto
+engine -- this file is a pure code-organization refactor, not a behavior
+change. See the per-variant files' own docstrings for what makes each one
+different.
 
 - A probabilistic pick-horizon model: instead of assuming every opponent
   pick is an independent draw from the global ADP distribution, survival
   probability is conditioned on each upcoming opponent's ACTUAL unfilled
   roster needs, derived live from Sleeper pick data (see
-  `compute_turn_gap_demand`). No opponent-side data is invented -- if no
-  `picks` list is supplied (e.g. in isolated unit tests), this degrades
-  gracefully to the unconditioned ADP-only probability.
+  `compute_turn_gap_demand`), further scaled by how thin the remaining pool
+  at that position actually is (see `_pick_probability_at_step`'s
+  `position_depth` parameter -- the scarcity-aware demand boost).
 - RARC (Risk-Adjusted Replacement Cost): a player's raw projection, minus a
-  variance penalty, minus a DYNAMIC expected-replacement-value baseline
-  (the value of "the best player left at this position by your next pick",
-  itself derived from the same survival probabilities -- not a hardcoded
-  round-based decay curve). Positional scarcity is now an emergent property
-  of the math instead of an arbitrary weight.
+  variance penalty (supplied by the caller's own `variance_fn` -- a
+  synthetic heuristic for sources with no real per-player variance data, a
+  real floor/ceiling-derived formula for DraftSharks), minus a DYNAMIC
+  expected-replacement-value baseline (the value of "the best player left
+  at this position by your next pick", itself derived from the same
+  survival probabilities -- not a hardcoded round-based decay curve).
 - Portfolio impact (ΔWP / ΔCeiling): each candidate's marginal contribution
   to the user's *starting lineup* win probability (vs. a data-derived
-  average-league-lineup baseline, since Sleeper's draft endpoints expose no
-  real per-opponent season schedule to model literal head-to-head weekly
-  matchups) and 85th-percentile ceiling. A player who'd only sit on the
-  bench (e.g. a 2nd TE) contributes zero to either -- no separate "is this
-  a backup" heuristic needed.
+  average-league-lineup baseline) and 85th-percentile ceiling. A player
+  who'd only sit on the bench (e.g. a 2nd TE) contributes zero to either.
 - A Pareto frontier (6-8 candidates, non-dominated on RARC vs. ceiling
-  upside) instead of a fixed 3-archetype list, so the LLM sees the real
-  shape of the decision instead of 3 pre-collapsed options.
+  upside) instead of a fixed 3-archetype list.
+- A QB1-elite opportunity-cost override: a locked-in early QB1 blocks a 2nd
+  QB for the rest of the draft by default, but a QB candidate that clears
+  the best currently-available RARC among the roster's actually-open
+  starter-slot positions by 2 standard deviations of its own uncertainty
+  breaks the lock anyway -- a genuine market anomaly, not just an
+  ordinarily-good QB.
 
-Known data limitations (flagged, not silently faked): the projections CSV
-has no per-player variance/std-dev column, so `_synthetic_std_dev` derives
-one heuristically (higher for Round 4-7 "Dead Zone" RBs, lower for WRs, per
-the PPR volume-vs-target-share literature cited in the source research).
-There's also no real per-opponent season schedule, so the win-probability
-baseline is a league-average lineup value computed from the projections
-pool itself, not a literal 11-opponent simulation.
+Known data limitations (flagged, not silently faked): the projections CSVs
+have no per-player variance/std-dev column (except DraftSharks), so
+`_synthetic_std_dev` derives one heuristically. There's also no real
+per-opponent season schedule, so the win-probability baseline is a
+league-average lineup value computed from the projections pool itself, not
+a literal 11-opponent simulation.
 
-Hard roster-construction rules (QB1-elite lock, single-TE cap, K/DEF
-round-gating + Round 14 boost + Round 15 force-fill) are UNCHANGED from the
-prior engine -- those are structural pool filters, not score-distorting
-weights, so they don't have the "metric space cardinality" problem this
-rewrite otherwise eliminates.
+## Parameterization contract for the four thin per-source files
+
+Every function below that needs to behave differently per source takes
+that difference as an explicit parameter -- never a global, never a
+closure, never a monkeypatched module attribute. This keeps this file
+callable in isolation (e.g. from a test) with zero hidden per-source state:
+
+- `variance_fn(row) -> float`: `_synthetic_std_dev` for RB/FP/SL,
+  `_real_std_dev` (defined locally in draft_math_ds.py -- it's DS-only, so
+  it doesn't belong here) for DS.
+- `finalize_fn(row) -> dict`: `_finalize_pareto_candidate` (this file's own
+  default, used as-is by RB/DS/SL) or FantasyPros' own version (adds the
+  `ecr` field).
+- `label_fn(candidates, current_pick_no) -> None`: `_label_candidates`
+  (this file's own default) or FantasyPros' own version (adds the "Expert
+  Buy-Low" tag).
+- `league_baseline_fn() -> tuple`: each per-source file's own
+  `@functools.lru_cache`-decorated `_league_baseline_lineup`, called with
+  zero arguments -- the cache and the per-source default CSV path both
+  live in the thin file, not here, so each source keeps its own
+  independent cache (matching `server.py`'s refresh endpoints, which each
+  call `.cache_clear()` on their own engine module's function only).
 """
 
-import functools
 import math
 import re
 
@@ -118,8 +96,101 @@ import pandas as pd
 from src.engine.draft_state import compute_pick_slot
 from src.engine.roster import Roster
 
-SUFFIX_PATTERN = re.compile(r"\s+\b(jr|sr|ii|iii|iv|v)\b$")
-PUNCTUATION_PATTERN = re.compile(r"[^\w\s]")
+__all__ = [
+    # --- Hard roster-construction rules ---
+    "POSITIONAL_TARGET",
+    "HARD_MAX_POSITIONS",
+    "FLEX_ELIGIBLE",
+    "TE_FINAL_ROUND_MAX",
+    "KICKER_DEFENSE_ROUNDS_FROM_END",
+    "FINAL_ROUND_REQUIRED_SLOT_POSITIONS",
+    "QB1_ELITE_ROUND_CUTOFF",
+    "QB1_LOCK_OVERRIDE_SIGMA_MULTIPLIER",
+    "ADP_FALLBACK",
+    # --- ADP std dev ---
+    "ADP_STD_DEV_BASE",
+    "ADP_STD_DEV_SLOPE",
+    "ADP_STD_DEV_SCALE_PICKS",
+    "calculate_adp_std_dev",
+    # --- Synthetic variance (default variance_fn for RB/FP/SL) ---
+    "BASE_VOLATILITY_PCT",
+    "RB_DEAD_ZONE_ADP_START",
+    "RB_DEAD_ZONE_ADP_END",
+    "RB_DEAD_ZONE_VOLATILITY_PREMIUM",
+    "WR_VOLATILITY_DISCOUNT",
+    "MIN_VOLATILITY_PCT",
+    "RB_BACKUP_VOLATILITY_PREMIUM",
+    "GAMES_PER_SEASON",
+    "RB_HIGH_FLOOR_PPG_THRESHOLD",
+    "RB_HIGH_FLOOR_DISCOUNT",
+    "_synthetic_std_dev",
+    # --- RARC ---
+    "RARC_VARIANCE_LAMBDA",
+    # --- Reach penalty ---
+    "REACH_PENALTY_SIGMA_MULTIPLIER",
+    "REACH_PENALTY_CAP",
+    "_reach_penalty",
+    # --- Same-team stack penalty ---
+    "SAME_TEAM_WR_WR_PENALTY",
+    "SAME_TEAM_WR_TE_PENALTY",
+    "SAME_TEAM_STACK_PENALTY_CAP",
+    "W_SAME_TEAM_STACK_PENALTY",
+    "_rostered_team_positions",
+    "_same_team_stack_penalty",
+    # --- Portfolio impact / win probability ---
+    "CEILING_Z",
+    "_optimal_lineup_value",
+    "_build_rostered_pool",
+    "_apply_portfolio_impact",
+    "_compute_league_baseline_lineup",
+    # --- Composite score weights ---
+    "W_RARC",
+    "W_DELTA_WP",
+    "W_DELTA_CEILING",
+    "W_REACH_PENALTY",
+    # --- High-contingency RB quota ---
+    "HIGH_CONTINGENCY_ROUND_START",
+    "HIGH_CONTINGENCY_CEILING_MULTIPLIER",
+    "HIGH_CONTINGENCY_STD_RATIO",
+    "HIGH_CONTINGENCY_MIN_SLOTS",
+    "_is_high_contingency",
+    "_is_high_contingency_rb",
+    # --- Pareto stream sizing ---
+    "PARETO_STREAM_MIN",
+    "PARETO_STREAM_MAX",
+    "PARETO_POOL_CAP",
+    "POSITION_DIVERSITY_CAP",
+    "_pareto_frontier",
+    # --- Opponent demand / survival probability ---
+    "DEMAND_MATCH_BOOST",
+    "DEMAND_MISS_DAMPEN",
+    "DEMAND_CLIFF_BOOST_CAP",
+    "SURVIVAL_EARLY_EXIT_THRESHOLD",
+    "_team_open_starter_needs",
+    "compute_turn_gap_demand",
+    "_pick_probability_at_step",
+    "_survival_probability",
+    "_dynamic_baseline",
+    "_apply_rarc",
+    # --- Name/roster matching ---
+    "normalize_name",
+    "get_drafted_names",
+    "_drafted_mask",
+    "_lookup_player",
+    # --- Roster-cap filters ---
+    "_kdef_unlocked",
+    "_qb1_elite_locked",
+    "_filter_hard_capped_positions",
+    "_apply_qb1_lock_override",
+    "_final_round_required_positions",
+    "_kdef_required_positions",
+    # --- Candidate finalization (default finalize_fn/label_fn for RB/DS/SL) ---
+    "_finalize_pareto_candidate",
+    "_label_candidates",
+    # --- Main entry point ---
+    "generate_pareto_candidate_stream",
+    "detect_roster_archetype",
+]
 
 # --- Hard roster-construction rules (pool filters, not weights) -----------
 # Only positions with a real structural cap live here. RB/WR have no cap --
@@ -183,7 +254,10 @@ def calculate_adp_std_dev(adp: float) -> float:
 # driven by volume-dependent (not efficiency-based) projections, while
 # PPR WRs in the same range have much higher hit rates via stable target
 # share. This is a proxy, not measured variance -- if a real per-player
-# projection-variance feed is ever added, wire it in here instead.
+# projection-variance feed is ever added, wire it in here instead. This is
+# the default `variance_fn` for RB/FP/SL; DraftSharks (DS) uses its own
+# real floor/ceiling-derived `_real_std_dev` instead (defined locally in
+# draft_math_ds.py, since it's the only source with real variance data).
 BASE_VOLATILITY_PCT = 0.12
 RB_DEAD_ZONE_ADP_START = 37.0
 RB_DEAD_ZONE_ADP_END = 84.0
@@ -265,15 +339,10 @@ W_SAME_TEAM_STACK_PENALTY = 15.0
 # elite player's full-season value swamps a realistic std), making
 # delta_win_prob_pct always ~0. GAMES_PER_SEASON (defined above, already
 # used for the RB2-floor PPG proxy) converts to a per-game scale for this
-# calculation too -- both need the same "season total -> one game's worth"
-# conversion, so they share one constant rather than each picking their own
-# season-length assumption (a real, if modest, calibration bug this fixed:
-# an earlier separate WEEKS_PER_SEASON=14 constant here, vs. 17 elsewhere,
-# inflated weekly means by ~21% and stds by ~10%, distorting the win-
-# probability z-score since the two scaled by different ratios). Assumes iid
-# per-game performance -- the CSV has no real per-game split to do better:
-# per_game_mean = season/17, per_game_std = season_std/sqrt(17).
-CEILING_Z = 1.03643  # 85th percentile z-score (precise value, per the source PDF)
+# calculation too. Assumes iid per-game performance -- the CSV has no real
+# per-game split to do better: per_game_mean = season/17,
+# per_game_std = season_std/sqrt(17).
+CEILING_Z = 1.04  # 85th percentile z-score
 
 # --- Composite score weights (tunable; RARC dominates as the primary value
 # signal, WP/ceiling nudge for roster fit, reach penalty is a strong but not
@@ -283,22 +352,6 @@ W_DELTA_WP = 3.0
 W_DELTA_CEILING = 1.0
 W_REACH_PENALTY = 15.0
 
-# --- Hybrid-specific: 3-tier variance blend weights ------------------------
-# Cross-validated weight distributions from the source PDF. Used only when
-# source_count >= 2 (i.e. sigma_cross is computable); source_count == 1
-# always falls back to pure synthetic (see _hybrid_variance).
-W_HYBRID_DS = 0.50  # DraftSharks floor/ceiling sigma, when DS is present
-W_HYBRID_CROSS = 0.35  # cross-source projection dispersion, when DS is present
-W_HYBRID_SYNTH = 0.15  # synthetic heuristic, when DS is present
-W_HYBRID_CROSS_NO_DS = 0.70  # cross-source dispersion, reweighted when DS is absent
-W_HYBRID_SYNTH_NO_DS = 0.30  # synthetic heuristic, reweighted when DS is absent
-
-# --- Hybrid-specific: Expert Buy-Low tag ------------------------------------
-# Ported from draft_math_fp.py -- see that file's module docstring for the
-# full rationale (deliberately tag-only, no composite_score effect, since
-# there's no backtested evidence yet for what weight would be correct).
-MARKET_EDGE_MIN_GAP = 15.0
-
 # --- Late-round high-contingency RB quota (Rounds 10+) -------------------
 # Backup RBs whose own 85th-percentile ceiling (mu + CEILING_Z * std_dev)
 # is at least 1.3x their own median projection -- i.e. real injury-
@@ -306,8 +359,7 @@ MARKET_EDGE_MIN_GAP = 15.0
 # least HIGH_CONTINGENCY_MIN_SLOTS of the 8 stream slots once WR mean
 # projections start dominating late-round RARC and would otherwise crowd
 # every backup RB out of the payload entirely. This is a selection-stage
-# quota (like the K/DEF pre-final-round requirement below), not a score multiplier --
-# it doesn't touch anyone's composite_score.
+# quota, not a score multiplier -- it doesn't touch anyone's composite_score.
 #
 # mu + CEILING_Z*std >= 1.3*mu  <=>  std/mu >= (1.3 - 1) / CEILING_Z, solved
 # algebraically from the existing ceiling formula rather than a new
@@ -349,14 +401,17 @@ DEMAND_MISS_DAMPEN = 0.55
 DEMAND_CLIFF_BOOST_CAP = 3.0
 SURVIVAL_EARLY_EXIT_THRESHOLD = 0.01  # baseline order-statistic tail cutoff
 
+SUFFIX_PATTERN = re.compile(r"\s+\b(jr|sr|ii|iii|iv|v)\b$")
+PUNCTUATION_PATTERN = re.compile(r"[^\w\s]")
+
 
 def normalize_name(name: str) -> str:
     """Lowercase, strip punctuation (periods, apostrophes, hyphens, ...) and
     suffixes (Jr/Sr/II/III/IV/V), and collapse whitespace.
 
-    Applied identically to Sleeper pick metadata and projections_hybrid.csv names so
-    the two sides always compare as pure name-identity, regardless of minor
-    punctuation formatting differences between the two sources.
+    Applied identically to Sleeper pick metadata and each source's CSV
+    names so the two sides always compare as pure name-identity, regardless
+    of minor punctuation formatting differences between the two sources.
     """
     normalized = name.strip().lower()
     normalized = PUNCTUATION_PATTERN.sub("", normalized)
@@ -442,10 +497,6 @@ def _drafted_mask(df: pd.DataFrame, drafted_player_names) -> pd.Series:
         index=df.index,
     )
     return exact_match | fallback_match
-
-
-def load_projections(csv_path: str = "data/projections_hybrid.csv") -> pd.DataFrame:
-    return pd.read_csv(csv_path)
 
 
 def _kdef_unlocked(round_num: int, total_rounds: int) -> bool:
@@ -624,9 +675,7 @@ def compute_turn_gap_demand(
     """Per-step (m=1..turn_gap) the drafting team's open starter needs. This
     is what makes pick-survival probability *conditional* on real opponent
     roster state instead of treating every future pick as an independent
-    draw from the global ADP distribution (the core flaw the prior EVONA
-    engine had: it couldn't know an opponent who just took a QB in Round 2
-    has near-zero odds of taking another QB in Round 3).
+    draw from the global ADP distribution.
     """
     steps = []
     total_picks = teams * total_rounds
@@ -657,13 +706,16 @@ def _pick_probability_at_step(
     This distinction matters: dividing the density by the already-elapsed
     survival probability (1 - CDF(pick_no - 0.5)) is what makes the
     per-step product in `_survival_probability` telescope into the correct
-    closed-form survival curve. Using the raw density directly (an earlier
-    bug) systematically overestimated survival for any player whose ADP
-    sits at or before the current pick -- e.g. a #2-overall-ADP player
-    evaluated at pick 1 showed ~47% odds of surviving 22 more picks,
-    when the real number is ~0%, because the raw-density version never
-    accounted for the probability mass already "spent" before the pick
-    being evaluated from.
+    closed-form survival curve.
+
+    `position_depth` (how many players remain available at this position,
+    computed once per generate_pareto_candidate_stream call -- see
+    _apply_rarc) scales the demand-match boost beyond a flat multiplier: a
+    team needing this position when depth is thin (a real positional
+    run/tier cliff) is a bigger survival risk than the same need against a
+    deep position group. Anchored so it reproduces exactly DEMAND_MATCH_BOOST
+    at position_depth == teams (one realistic replacement per team), capped
+    at DEMAND_CLIFF_BOOST_CAP so it can't blow up as depth approaches zero.
     """
     already_taken_prob = _normal_cdf(pick_no - 0.5, mean=adp, std=sigma_adp)
     survived_so_far = 1.0 - already_taken_prob
@@ -705,13 +757,8 @@ def _survival_probability(
 
 
 def _synthetic_std_dev(row) -> float:
-    """RB Dead-Zone/backup-RB ADP-band gating deliberately reads
-    `adp_global`, not the platform-local `adp_local` -- Dead Zone banding
-    (ADP 37-84) is a market-consensus research concept, so it belongs on
-    the global track, same as the reach penalty and Buy-Low tag.
-    """
     pct = BASE_VOLATILITY_PCT
-    adp = row.get("adp_global", row.get("adp"))
+    adp = row["adp"]
     position = row["position"]
     if position == "RB" and pd.notna(adp) and RB_DEAD_ZONE_ADP_START <= adp <= RB_DEAD_ZONE_ADP_END:
         pct += RB_DEAD_ZONE_VOLATILITY_PREMIUM
@@ -723,57 +770,6 @@ def _synthetic_std_dev(row) -> float:
     elif position == "WR":
         pct = max(MIN_VOLATILITY_PCT, pct - WR_VOLATILITY_DISCOUNT)
     return row["projected_points"] * pct
-
-
-def _hybrid_variance(row) -> float:
-    """Three-tier variance blend (see module docstring / the source PDF's
-    "Multi-Dimensional Variance Calibration" stage): DraftSharks floor-
-    derived sigma_DS, cross-source projection-dispersion sigma_cross
-    (precomputed in update_data_hybrid.py), and the synthetic heuristic
-    sigma_synth, combined by data-availability weights rather than a binary
-    real-vs-synthetic switch.
-
-    sigma_DS is deliberately DOWNSIDE-ONLY: (projected_points - floor) /
-    CEILING_Z, not the full (ceiling - floor) / (2 * CEILING_Z) span -- a
-    symmetric sigma penalizes a player for a higher ceiling as if it were
-    more bust risk, which is backwards for a risk-adjusted metric. Basing
-    sigma_DS on the floor distance alone makes it independent of ceiling
-    entirely; that upside still shows up correctly elsewhere, via the
-    separate delta_ceiling_pts portfolio-impact term.
-
-    Branch selection matches the PDF's formula exactly, including its edge
-    case: source_count == 1 always falls back to pure synthetic, even for a
-    hypothetical DraftSharks-only player who'd otherwise have real
-    floor/ceiling available -- sigma_cross needs >=2 sources to mean
-    anything, and the PDF doesn't define a 4th branch just for that case.
-    In practice this is rare, since DraftSharks' ~250-player pool is a
-    subset of the three wider sources.
-    """
-    sigma_synth = _synthetic_std_dev(row)
-    source_count = row.get("source_count", 1)
-    if pd.isna(source_count) or source_count <= 1:
-        return sigma_synth
-
-    sigma_cross = row.get("sigma_cross")
-    if pd.isna(sigma_cross):
-        sigma_cross = sigma_synth
-
-    floor = row.get("floor_points")
-    ceiling = row.get("ceiling_points")
-    has_ds = pd.notna(floor) and pd.notna(ceiling)
-
-    if has_ds:
-        sigma_ds = max(0.0, (row["projected_points"] - floor) / CEILING_Z)
-        variance = (
-            W_HYBRID_DS * sigma_ds**2
-            + W_HYBRID_CROSS * sigma_cross**2
-            + W_HYBRID_SYNTH * sigma_synth**2
-        )
-    else:
-        variance = (
-            W_HYBRID_CROSS_NO_DS * sigma_cross**2 + W_HYBRID_SYNTH_NO_DS * sigma_synth**2
-        )
-    return math.sqrt(max(0.0, variance))
 
 
 def _dynamic_baseline(position_df: pd.DataFrame) -> float:
@@ -798,27 +794,25 @@ def _dynamic_baseline(position_df: pd.DataFrame) -> float:
     return baseline
 
 
-def _apply_rarc(df: pd.DataFrame, current_pick_no: int, demand_steps: list, teams: int = 12) -> pd.DataFrame:
+def _apply_rarc(df: pd.DataFrame, current_pick_no: int, demand_steps: list, teams: int, variance_fn) -> pd.DataFrame:
     """RARC_i = (mu_i - lambda * sigma_i^2) - B_pos(i)(K)
-
-    Survival probability (and its sigma) is driven by `adp_local` --
-    Sleeper's own platform ADP -- not the global-market `adp_global`, since
-    opponent behavior in a live Sleeper draft room is governed by what THIS
-    platform shows them. See module docstring's "dual-track ADP" section.
 
     `position_depth_counts` (how many players remain available at each
     position, right now) is computed once here -- not per candidate, not
     per rollout -- and used to scale the demand-match boost inside
     _survival_probability/_pick_probability_at_step (see their docstrings).
+
+    `variance_fn` is the caller's per-source std_dev heuristic (synthetic or
+    real floor/ceiling-derived) -- see this module's docstring.
     """
     df = df.copy()
     position_depth_counts = df["position"].value_counts().to_dict()
-    adp_local = df["adp_local"].fillna(df["adp_global"]).fillna(ADP_FALLBACK)
-    df["sigma_adp_local"] = adp_local.apply(calculate_adp_std_dev)
-    df["std_dev"] = df.apply(_hybrid_variance, axis=1)
+    adp = df["adp"].fillna(ADP_FALLBACK)
+    df["sigma_adp"] = adp.apply(calculate_adp_std_dev)
+    df["std_dev"] = df.apply(variance_fn, axis=1)
     df["survival_prob"] = [
         _survival_probability(a, s, p, current_pick_no, demand_steps, position_depth_counts.get(p), teams)
-        for a, s, p in zip(adp_local, df["sigma_adp_local"], df["position"])
+        for a, s, p in zip(adp, df["sigma_adp"], df["position"])
     ]
 
     baselines = {position: _dynamic_baseline(df[df["position"] == position]) for position in df["position"].unique()}
@@ -840,8 +834,7 @@ def _reach_penalty(adp: float, sigma_adp: float, current_pick_no: int) -> float:
     return min(REACH_PENALTY_CAP, math.exp(delta) - 1.0)
 
 
-@functools.lru_cache(maxsize=4)
-def _league_baseline_lineup(csv_path: str = "data/projections_hybrid.csv") -> tuple:
+def _compute_league_baseline_lineup(csv_path: str) -> tuple:
     """A generic 'average starting lineup' mean/std, used as the opponent
     distribution in the win-probability model. Sleeper's draft endpoints
     expose picks only, not a real season schedule or 11 opponents' full
@@ -849,8 +842,16 @@ def _league_baseline_lineup(csv_path: str = "data/projections_hybrid.csv") -> tu
     grounded proxy directly from the projections pool: the Nth-best player
     at each starting position, where N = (starters needed at that position)
     x (12 teams), i.e. "what a typical team's starting lineup looks like."
+
+    Deliberately UNCACHED here -- each per-source file wraps this in its own
+    `@functools.lru_cache`-decorated `_league_baseline_lineup(csv_path=...)`
+    with its own default CSV path, so each source keeps an independent
+    cache (matching `server.py`'s refresh endpoints, which call
+    `.cache_clear()` on their own engine module's function only -- a shared
+    cache here would mean refreshing one source's data silently invalidates
+    every other source's cached baseline too).
     """
-    df = load_projections(csv_path)
+    df = pd.read_csv(csv_path)
     teams = 12
 
     def tier_mean_std(position: str, starters_per_team: int) -> tuple:
@@ -885,7 +886,7 @@ def _lookup_player(df: pd.DataFrame, player_name: str):
     return matches.iloc[0]
 
 
-def _build_rostered_pool(roster, projections_df: pd.DataFrame) -> list:
+def _build_rostered_pool(roster, projections_df: pd.DataFrame, variance_fn) -> list:
     """Every rostered player (starters AND bench), with their point/variance
     values -- the raw pool a greedy lineup optimizer needs. Deliberately
     ignores which literal Sleeper slot each player currently sits in.
@@ -907,7 +908,7 @@ def _build_rostered_pool(roster, projections_df: pd.DataFrame) -> list:
                     "player_name": player_name,
                     "position": row["position"],
                     "effective_points": row["projected_points"],
-                    "std_dev": _hybrid_variance(row),
+                    "std_dev": variance_fn(row),
                 }
             )
     return pool
@@ -917,12 +918,8 @@ def _optimal_lineup_value(pool: list) -> tuple:
     """Greedy top-value assignment to starting slots (1 QB, 2 RB, 2 WR, 1
     TE, then the single highest-value remaining RB/WR/TE to FLEX) --
     ALWAYS starts your best 9 regardless of which literal bench/starter
-    slot a player's draft order happened to assign them to. Fixes a real
-    bug: the prior lineup-value calc trusted Sleeper's first-come-first-
-    served slot assignment directly, which could leave a genuinely better
-    player benched behind a worse one purely because of pick order (e.g. a
-    late-drafted elite WR sitting on the bench behind a weaker FLEX
-    starter). Returns (mean, std) of the resulting lineup.
+    slot a player's draft order happened to assign them to. Returns
+    (mean, std) of the resulting lineup.
     """
     used = set()
     starters = []
@@ -946,38 +943,33 @@ def _optimal_lineup_value(pool: list) -> tuple:
     return mean, math.sqrt(variance)
 
 
-def _apply_portfolio_impact(df: pd.DataFrame, roster, projections_df: pd.DataFrame) -> pd.DataFrame:
+def _apply_portfolio_impact(
+    df: pd.DataFrame, roster, projections_df: pd.DataFrame, variance_fn, league_baseline_fn
+) -> pd.DataFrame:
     """ΔWP_i = P(Win | Roster ∪ {i}) - P(Win | Roster), ΔCeiling_i =
     Ceiling_85(Roster ∪ {i}) - Ceiling_85(Roster), both computed on a
     per-game basis (see GAMES_PER_SEASON) against a league-average lineup
-    baseline (see `_league_baseline_lineup`) rather than a literal
-    per-opponent weekly simulation, since no real season-schedule/opponent-
-    roster data is available.
+    baseline (see `league_baseline_fn`) rather than a literal per-opponent
+    weekly simulation, since no real season-schedule/opponent-roster data
+    is available.
 
     Win probability uses ONLY the roster's own per-game std_dev as the
-    spread -- `_league_baseline_lineup`'s "std" is the spread BETWEEN
-    different players' season projections within a replacement tier (a
-    cross-sectional quality-dispersion statistic), not a measure of how a
-    single roster's own score fluctuates week to week. Those are different
-    kinds of uncertainty; combining them via sqrt(a^2+b^2) as if they were
-    the same statistic was a real (if subtle) modeling bug. Treating
-    league_mean as a fixed benchmark and asking "given MY roster's own
-    game-to-game volatility, what's the probability I clear that benchmark"
-    is the well-defined version of this question.
+    spread -- the league baseline's "std" is the spread BETWEEN different
+    players' season projections within a replacement tier (a cross-
+    sectional quality-dispersion statistic), not a measure of how a single
+    roster's own score fluctuates week to week.
 
     "Roster ∪ {i}" is evaluated with the greedy optimizer above, run fresh
-    on the full pool (current roster + candidate) for every candidate -- if
-    candidate i outscores the current FLEX starter (or any starter at their
-    position), the optimizer automatically bumps them into the lineup and
-    pushes the displaced starter to the bench, so i gets full starter
-    credit. A player who wouldn't crack the optimal top-9 contributes zero
-    to either delta, exactly as before -- just correctly value-driven now
-    instead of trusting draft-order slot assignment.
+    on the full pool (current roster + candidate) for every candidate.
+
+    `league_baseline_fn` is the caller's own cached `_league_baseline_lineup`
+    (zero-arg call -- its own default csv_path is already baked in by the
+    per-source file that defines it).
     """
     df = df.copy()
-    base_pool = _build_rostered_pool(roster, projections_df)
+    base_pool = _build_rostered_pool(roster, projections_df, variance_fn)
     base_mean, base_std = _optimal_lineup_value(base_pool)
-    league_mean, _league_std = _league_baseline_lineup()
+    league_mean, _league_std = league_baseline_fn()
 
     per_game_base_mean = base_mean / GAMES_PER_SEASON
     per_game_base_std = base_std / math.sqrt(GAMES_PER_SEASON)
@@ -1060,13 +1052,12 @@ def _is_high_contingency(projected_points: float, std_dev: float, floor_points=N
     ratio when real floor/ceiling data exists
     (ceiling_points / projected_points >= HIGH_CONTINGENCY_CEILING_MULTIPLIER)
     rather than reverse-deriving an equivalent ratio through std_dev --
-    critical here, since std_dev's DS-derived tier is now deliberately
-    downside-only (see _hybrid_variance above): a backup RB with near-zero
-    floor risk but an enormous real ceiling would otherwise never clear a
-    std-based threshold, even though "near-zero downside, enormous upside"
-    is exactly the profile this quota exists to catch. Falls back to the
-    std_dev-based ratio when no real ceiling data exists (source_count == 1
-    or no DraftSharks match -- the synthetic-only tier of _hybrid_variance).
+    relevant for the DS/Hybrid variants, where std_dev is deliberately
+    downside-only: a backup RB with near-zero floor risk but an enormous
+    real ceiling would otherwise never clear a std-based threshold, even
+    though "near-zero downside, enormous upside" is exactly the profile
+    this quota exists to catch. Falls back to the original std_dev-based
+    ratio when no real ceiling data exists (RB/FP/SL -- unchanged).
     """
     if projected_points <= 0:
         return False
@@ -1112,18 +1103,14 @@ def _pareto_frontier(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _finalize_pareto_candidate(row) -> dict:
+    """Default candidate-serialization used as-is by RB/DS/SL. FantasyPros
+    defines its own version (adds an `ecr` field) instead of using this one.
+    """
     return {
         "player_name": row["player_name"],
         "position": row["position"],
         "team": row.get("team", ""),
-        # "adp" means adp_global throughout this candidate dict (reach
-        # penalty, Dead Zone tag, Buy-Low tag all consume it as such) --
-        # adp_local is exposed separately for transparency/debugging only.
-        "adp": None if pd.isna(row.get("adp_global")) else round(float(row["adp_global"]), 1),
-        "adp_local": None if pd.isna(row.get("adp_local")) else round(float(row["adp_local"]), 1),
-        "ecr": None if pd.isna(row.get("ecr")) else round(float(row["ecr"]), 1),
-        "floor_points": None if pd.isna(row.get("floor_points")) else round(float(row["floor_points"]), 1),
-        "ceiling_points": None if pd.isna(row.get("ceiling_points")) else round(float(row["ceiling_points"]), 1),
+        "adp": None if pd.isna(row.get("adp")) else round(float(row["adp"]), 1),
         "projected_points": round(float(row["projected_points"]), 1),
         "std_dev": round(float(row["std_dev"]), 1),
         "rarc_score": round(float(row["rarc_score"]), 1),
@@ -1139,7 +1126,9 @@ def _finalize_pareto_candidate(row) -> dict:
 def _label_candidates(candidates: list, current_pick_no: int) -> None:
     """Mutates each candidate dict in place with a short human-readable
     `strategic_profile` label -- context for the LLM prompt (and the UI),
-    not used in any scoring decision.
+    not used in any scoring decision. Default used as-is by RB/DS/SL.
+    FantasyPros defines its own version (adds the "Expert Buy-Low" tag)
+    instead of using this one.
     """
     if not candidates:
         return
@@ -1167,9 +1156,6 @@ def _label_candidates(candidates: list, current_pick_no: int) -> None:
             tags.append("Reach Risk")
         elif adp is not None and adp - current_pick_no > 15:
             tags.append("Market Fall")
-        ecr = candidate.get("ecr")
-        if ecr is not None and adp is not None and (adp - ecr) >= MARKET_EDGE_MIN_GAP:
-            tags.append("Expert Buy-Low")
         if candidate.get("same_team_stack_penalty", 0.0) > 0:
             tags.append("Same-Team Stack Risk")
         if i == max_ceiling_idx:
@@ -1181,7 +1167,11 @@ def _label_candidates(candidates: list, current_pick_no: int) -> None:
 
 def generate_pareto_candidate_stream(
     drafted_player_names: set,
-    csv_path: str = "data/projections_hybrid.csv",
+    csv_path: str,
+    variance_fn,
+    finalize_fn,
+    label_fn,
+    league_baseline_fn,
     roster=None,
     round_num: int = 1,
     total_rounds: int = 15,
@@ -1193,8 +1183,16 @@ def generate_pareto_candidate_stream(
     """Main entry point: constructs a Pareto-optimal candidate stream
     (6-8 players, non-dominated on RARC vs. ceiling upside) instead of a
     fixed 3-archetype list.
+
+    `csv_path`, `variance_fn`, `finalize_fn`, `label_fn`, `league_baseline_fn`
+    are the per-source pieces this module doesn't hardcode -- see this
+    module's docstring for the parameterization contract. Every per-source
+    thin file (`draft_math_rb.py`/`draft_math_ds.py`/`draft_math_fp.py`/
+    `draft_math_sl.py`) exposes its own `generate_pareto_candidate_stream`
+    with the original, unparameterized public signature -- this version is
+    an internal implementation detail those four wrap.
     """
-    projections_df = load_projections(csv_path)
+    projections_df = pd.read_csv(csv_path)
     available_df = projections_df[~_drafted_mask(projections_df, drafted_player_names)]
 
     if not _kdef_unlocked(round_num, total_rounds):
@@ -1222,18 +1220,13 @@ def generate_pareto_candidate_stream(
     else:
         demand_steps = [set()] * turn_gap
 
-    available_df = _apply_rarc(available_df, current_pick_no, demand_steps, teams)
+    available_df = _apply_rarc(available_df, current_pick_no, demand_steps, teams, variance_fn)
     available_df = _apply_qb1_lock_override(available_df, roster)
-    # Reach penalty is scored against adp_global (real market ADP), not the
-    # adp_local track _apply_rarc used above for survival probability -- see
-    # module docstring's "dual-track ADP" section. Computed independently
-    # (its own sigma) rather than reusing _apply_rarc's sigma_adp_local.
-    adp_global = available_df["adp_global"].fillna(available_df["adp_local"]).fillna(ADP_FALLBACK)
-    sigma_adp_global = adp_global.apply(calculate_adp_std_dev)
     available_df["reach_penalty"] = [
-        _reach_penalty(a, s, current_pick_no) for a, s in zip(adp_global, sigma_adp_global)
+        _reach_penalty(a, s, current_pick_no)
+        for a, s in zip(available_df["adp"].fillna(ADP_FALLBACK), available_df["sigma_adp"])
     ]
-    available_df = _apply_portfolio_impact(available_df, roster, projections_df)
+    available_df = _apply_portfolio_impact(available_df, roster, projections_df, variance_fn, league_baseline_fn)
 
     rostered_team_positions = _rostered_team_positions(roster, projections_df)
     available_df["same_team_stack_penalty"] = [
@@ -1249,9 +1242,8 @@ def generate_pareto_candidate_stream(
         - W_SAME_TEAM_STACK_PENALTY * available_df["same_team_stack_penalty"]
     )
 
-    # K/DEF requirement is now handled by _kdef_required_positions above
-    # (a hard pool restriction, not a guaranteed-inclusion nudge) -- see its
-    # docstring for why the softer version wasn't reliable.
+    # K/DEF requirement is handled by _kdef_required_positions above (a
+    # hard pool restriction, not a guaranteed-inclusion nudge).
     guaranteed = []
 
     # Round 10+ high-contingency RB quota: same structural-override pattern
@@ -1303,18 +1295,14 @@ def generate_pareto_candidate_stream(
                 break
             try_add(row)
 
-    # Guaranteed-inclusion picks (DEF completion, high-contingency RB quota)
-    # are added first above so they're never dropped, but that means the
-    # build order does NOT reflect quality -- sort here so the returned list
-    # is genuinely best-first. This matters beyond cosmetics:
-    # fallback_recommendation() (and the UI) both assume candidates[0] is the
-    # top pick, which was silently false before this sort (a guaranteed
-    # low-score bench RB or DEF could sit at index 0 ahead of the actual best
-    # candidate).
+    # Guaranteed-inclusion picks (K/DEF completion, high-contingency RB
+    # quota) are added first above so they're never dropped, but that means
+    # the build order does NOT reflect quality -- sort here so the returned
+    # list is genuinely best-first.
     selected.sort(key=lambda row: row["composite_score"], reverse=True)
 
-    candidates = [_finalize_pareto_candidate(row) for row in selected]
-    _label_candidates(candidates, current_pick_no)
+    candidates = [finalize_fn(row) for row in selected]
+    label_fn(candidates, current_pick_no)
     return candidates
 
 

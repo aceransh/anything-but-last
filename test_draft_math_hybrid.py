@@ -120,12 +120,17 @@ full_row = {
     "position": "RB", "adp_global": 50.0, "projected_points": 200.0,
     "source_count": 3, "sigma_cross": 15.0, "floor_points": 100.0, "ceiling_points": 300.0,
 }
-sigma_ds = (300.0 - 100.0) / (2 * CEILING_Z)
+sigma_ds = (200.0 - 100.0) / CEILING_Z  # downside-only: (projected_points - floor) / CEILING_Z
 sigma_synth_full = _synthetic_std_dev(full_row)
 expected_full = math.sqrt(W_HYBRID_DS * sigma_ds**2 + W_HYBRID_CROSS * 15.0**2 + W_HYBRID_SYNTH * sigma_synth_full**2)
 actual_full = _hybrid_variance(full_row)
 assert abs(actual_full - expected_full) < 1e-6, f"FAIL: full 3-tier blend mismatch, got {actual_full} vs expected {expected_full}"
-print(f"\nPASS: 3-tier blend (DS+cross+synth) matches the weighted formula exactly ({actual_full:.2f}).")
+print(f"\nPASS: 3-tier blend (DS+cross+synth) matches the weighted downside-only formula exactly ({actual_full:.2f}).")
+
+higher_ceiling_row = dict(full_row, ceiling_points=600.0)
+actual_higher_ceiling = _hybrid_variance(higher_ceiling_row)
+assert actual_higher_ceiling == actual_full, f"FAIL: a higher ceiling at the same floor/projection should not change _hybrid_variance, got {actual_higher_ceiling} vs {actual_full}"
+print(f"PASS: raising the ceiling alone (300 -> 600) leaves the 3-tier blend unchanged ({actual_higher_ceiling:.2f}) -- ceiling upside is no longer penalized as risk.")
 
 no_ds_row = {
     "position": "WR", "adp_global": 50.0, "projected_points": 200.0,
@@ -424,3 +429,60 @@ print(f"No edge (adp 60, ecr 55, gap=5 < {MARKET_EDGE_MIN_GAP}): {candidates16[1
 assert "Expert Buy-Low" in candidates16[0]["strategic_profile"], f"FAIL: a {MARKET_EDGE_MIN_GAP}+ rank gap (adp_global - ecr) should trigger Expert Buy-Low"
 assert "Expert Buy-Low" not in candidates16[1]["strategic_profile"], "FAIL: a small adp_global-ecr gap should not trigger Expert Buy-Low"
 print("PASS: Expert Buy-Low tag fires on adp_global - ecr >= MARKET_EDGE_MIN_GAP, the confirmed sign convention.")
+
+
+# Rule 17: scarcity-aware demand boost -- a team's positional need is a
+# bigger survival risk when few real alternatives remain at that position
+# (a positional run/tier cliff) than when the position is deep. Holding
+# adp/sigma/team_needs fixed, only position_depth should move the hazard.
+from src.engine.draft_math_hybrid import DEMAND_MATCH_BOOST, _pick_probability_at_step
+
+thin_hazard = _pick_probability_at_step(50.0, 10.0, 55, {"RB"}, "RB", position_depth=3, teams=12)
+deep_hazard = _pick_probability_at_step(50.0, 10.0, 55, {"RB"}, "RB", position_depth=12, teams=12)
+very_deep_hazard = _pick_probability_at_step(50.0, 10.0, 55, {"RB"}, "RB", position_depth=50, teams=12)
+default_hazard = _pick_probability_at_step(50.0, 10.0, 55, {"RB"}, "RB")
+print(f"\nHazard by position_depth (thin=3, deep=12, very_deep=50): {thin_hazard:.4f}, {deep_hazard:.4f}, {very_deep_hazard:.4f}")
+assert thin_hazard > deep_hazard > very_deep_hazard, (
+    f"FAIL: hazard should strictly increase as position_depth thins, got thin={thin_hazard}, deep={deep_hazard}, very_deep={very_deep_hazard}"
+)
+assert abs(deep_hazard - default_hazard) < 1e-9, (
+    f"FAIL: omitting position_depth should default to depth==teams (today's flat DEMAND_MATCH_BOOST={DEMAND_MATCH_BOOST}), got {default_hazard} vs {deep_hazard}"
+)
+print("PASS: demand-match hazard scales with position scarcity, and the no-arg default exactly reproduces the original flat-boost behavior.")
+
+# Rule 18: QB1-elite-lock opportunity-cost override -- an ordinary 2nd QB
+# stays locked out, but a QB candidate whose rarc_score clears the best
+# open-starter-slot alternative by QB1_LOCK_OVERRIDE_SIGMA_MULTIPLIER
+# standard deviations of its own uncertainty survives the lock.
+from src.engine.draft_math_hybrid import QB1_LOCK_OVERRIDE_SIGMA_MULTIPLIER, _apply_qb1_lock_override
+
+roster18 = Roster()
+roster18.add_player("Josh Allen", "QB", round_num=2)  # elite-tier QB1 -> lock active
+roster18.add_player("Christian McCaffrey", "RB", round_num=1)  # RB2/WR1/WR2/TE/FLEX still open
+
+candidates18_df = pd.DataFrame(
+    [
+        {"player_name": "Ordinary Backup QB", "position": "QB", "rarc_score": 5.0, "std_dev": 20.0},
+        {"player_name": "Generational QB", "position": "QB", "rarc_score": 200.0, "std_dev": 20.0},
+        {"player_name": "Best Open Slot WR", "position": "WR", "rarc_score": 50.0, "std_dev": 15.0},
+    ]
+)
+result18 = _apply_qb1_lock_override(candidates18_df, roster18)
+survivors18 = set(result18["player_name"])
+print(f"\nQB1 lock active, best open-slot RARC=50.0 (2-sigma threshold={QB1_LOCK_OVERRIDE_SIGMA_MULTIPLIER * 20.0}): survivors={survivors18}")
+assert "Ordinary Backup QB" not in survivors18, "FAIL: an ordinary 2nd QB should stay locked out"
+assert "Generational QB" in survivors18, "FAIL: a QB clearing the opportunity-cost threshold by a wide margin should override the lock"
+assert "Best Open Slot WR" in survivors18, "FAIL: non-QB candidates should never be touched by this filter"
+print("PASS: QB1 lock override lets a genuine market anomaly through while still blocking an ordinarily-good 2nd QB.")
+
+roster18_full = Roster()
+roster18_full.add_player("Josh Allen", "QB", round_num=2)
+for pos, count in (("RB", 2), ("WR", 2), ("TE", 1)):
+    for i in range(count):
+        roster18_full.add_player(f"{pos} Filler {i}", pos, round_num=1)
+roster18_full.add_player("Flex Filler", "RB", round_num=1)  # fills FLEX -> no open starter slots left
+result18_full = _apply_qb1_lock_override(candidates18_df, roster18_full)
+assert "QB" not in set(result18_full["position"]), (
+    "FAIL: with no open starter-slot opportunity cost to weigh (only bench remains), the lock should stay absolute"
+)
+print("PASS: with every starter slot already filled, the lock stays absolute (no opportunity cost left to justify an override).")

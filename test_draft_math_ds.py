@@ -93,22 +93,30 @@ sigma_late = calculate_adp_std_dev(150.0)
 assert sigma_late > sigma_early, "FAIL: ADP std dev should grow with pick depth"
 print(f"\nPASS: ADP std dev grows with draft depth (pick 5: {sigma_early:.2f}, pick 150: {sigma_late:.2f}).")
 
-# Rule 5 (DS-specific): real per-player variance is derived from
-# DraftSharks' own floor_points/ceiling_points spread, not a synthetic
-# percentage-of-points heuristic. A player with a wide floor-ceiling gap
-# should show a materially higher std_dev than one with a narrow gap, even
-# at the same projected_points -- and the value should match the documented
-# (ceiling - floor) / (2 * CEILING_Z) formula exactly.
+# Rule 5 (DS-specific, downside-only): real per-player variance is derived
+# from DraftSharks' own floor_points alone, not the full floor-ceiling
+# spread. A player with a lower floor (more downside) should show a
+# materially higher std_dev than one with a higher floor, even at the same
+# projected_points -- and the value should match the documented
+# (projected_points - floor) / CEILING_Z formula exactly. Critically, a
+# HIGHER ceiling at the SAME floor/projection must NOT increase std_dev --
+# that's the entire point of this fix (ceiling upside shouldn't be
+# penalized as if it were bust risk).
 from src.engine.draft_math_ds import CEILING_Z, _real_std_dev
 
 wide_row = {"position": "RB", "projected_points": 200.0, "floor_points": 100.0, "ceiling_points": 300.0}
 narrow_row = {"position": "RB", "projected_points": 200.0, "floor_points": 180.0, "ceiling_points": 220.0}
 wide_std = _real_std_dev(wide_row)
 narrow_std = _real_std_dev(narrow_row)
-expected_wide_std = (300.0 - 100.0) / (2 * CEILING_Z)
-assert wide_std > narrow_std, f"FAIL: wide floor-ceiling spread ({wide_std}) should exceed a narrow one's ({narrow_std})"
-assert abs(wide_std - expected_wide_std) < 1e-9, f"FAIL: _real_std_dev should exactly match (ceiling-floor)/(2*CEILING_Z), got {wide_std} vs expected {expected_wide_std}"
-print(f"PASS: real std_dev from floor/ceiling spread ({wide_std:.1f} wide vs {narrow_std:.1f} narrow) matches the documented formula.")
+expected_wide_std = (200.0 - 100.0) / CEILING_Z
+assert wide_std > narrow_std, f"FAIL: a lower floor ({wide_std}) should exceed a higher floor's std_dev ({narrow_std})"
+assert abs(wide_std - expected_wide_std) < 1e-9, f"FAIL: _real_std_dev should exactly match (projected_points-floor)/CEILING_Z, got {wide_std} vs expected {expected_wide_std}"
+print(f"PASS: real std_dev from floor distance ({wide_std:.1f} wide vs {narrow_std:.1f} narrow) matches the documented downside-only formula.")
+
+higher_ceiling_row = {"position": "RB", "projected_points": 200.0, "floor_points": 100.0, "ceiling_points": 500.0}
+higher_ceiling_std = _real_std_dev(higher_ceiling_row)
+assert higher_ceiling_std == wide_std, f"FAIL: a higher ceiling at the same floor/projection should NOT change std_dev, got {higher_ceiling_std} vs {wide_std}"
+print(f"PASS: raising the ceiling alone (300 -> 500) leaves std_dev unchanged ({higher_ceiling_std:.1f}) -- ceiling upside is no longer penalized as risk.")
 
 # Rule 6: reach penalty is continuous, not an instant max-out -- a mild
 # (~1 pick) early selection should score much lower than a severe
@@ -307,3 +315,60 @@ assert rb_penalty == 0.0, f"FAIL: RB pairings should never be penalized (not a r
 assert qb_penalty == 0.0, f"FAIL: QB stacks should never be penalized (deliberate positive-correlation strategy), got {qb_penalty}"
 assert other_team_penalty == 0.0, f"FAIL: a different-team WR should get no stack penalty, got {other_team_penalty}"
 print("PASS: same-team stack penalty correctly ranks WR+WR > WR+TE > 0, and never penalizes RB pairings or QB stacks.")
+
+
+# Rule 15: scarcity-aware demand boost -- a team's positional need is a
+# bigger survival risk when few real alternatives remain at that position
+# (a positional run/tier cliff) than when the position is deep. Holding
+# adp/sigma/team_needs fixed, only position_depth should move the hazard.
+from src.engine.draft_math_ds import DEMAND_MATCH_BOOST, _pick_probability_at_step
+
+thin_hazard = _pick_probability_at_step(50.0, 10.0, 55, {"RB"}, "RB", position_depth=3, teams=12)
+deep_hazard = _pick_probability_at_step(50.0, 10.0, 55, {"RB"}, "RB", position_depth=12, teams=12)
+very_deep_hazard = _pick_probability_at_step(50.0, 10.0, 55, {"RB"}, "RB", position_depth=50, teams=12)
+default_hazard = _pick_probability_at_step(50.0, 10.0, 55, {"RB"}, "RB")
+print(f"\nHazard by position_depth (thin=3, deep=12, very_deep=50): {thin_hazard:.4f}, {deep_hazard:.4f}, {very_deep_hazard:.4f}")
+assert thin_hazard > deep_hazard > very_deep_hazard, (
+    f"FAIL: hazard should strictly increase as position_depth thins, got thin={thin_hazard}, deep={deep_hazard}, very_deep={very_deep_hazard}"
+)
+assert abs(deep_hazard - default_hazard) < 1e-9, (
+    f"FAIL: omitting position_depth should default to depth==teams (today's flat DEMAND_MATCH_BOOST={DEMAND_MATCH_BOOST}), got {default_hazard} vs {deep_hazard}"
+)
+print("PASS: demand-match hazard scales with position scarcity, and the no-arg default exactly reproduces the original flat-boost behavior.")
+
+# Rule 16: QB1-elite-lock opportunity-cost override -- an ordinary 2nd QB
+# stays locked out, but a QB candidate whose rarc_score clears the best
+# open-starter-slot alternative by QB1_LOCK_OVERRIDE_SIGMA_MULTIPLIER
+# standard deviations of its own uncertainty survives the lock.
+from src.engine.draft_math_ds import QB1_LOCK_OVERRIDE_SIGMA_MULTIPLIER, _apply_qb1_lock_override
+
+roster16 = Roster()
+roster16.add_player("Josh Allen", "QB", round_num=2)  # elite-tier QB1 -> lock active
+roster16.add_player("Christian McCaffrey", "RB", round_num=1)  # RB2/WR1/WR2/TE/FLEX still open
+
+candidates16_df = pd.DataFrame(
+    [
+        {"player_name": "Ordinary Backup QB", "position": "QB", "rarc_score": 5.0, "std_dev": 20.0},
+        {"player_name": "Generational QB", "position": "QB", "rarc_score": 200.0, "std_dev": 20.0},
+        {"player_name": "Best Open Slot WR", "position": "WR", "rarc_score": 50.0, "std_dev": 15.0},
+    ]
+)
+result16 = _apply_qb1_lock_override(candidates16_df, roster16)
+survivors16 = set(result16["player_name"])
+print(f"\nQB1 lock active, best open-slot RARC=50.0 (2-sigma threshold={QB1_LOCK_OVERRIDE_SIGMA_MULTIPLIER * 20.0}): survivors={survivors16}")
+assert "Ordinary Backup QB" not in survivors16, "FAIL: an ordinary 2nd QB should stay locked out"
+assert "Generational QB" in survivors16, "FAIL: a QB clearing the opportunity-cost threshold by a wide margin should override the lock"
+assert "Best Open Slot WR" in survivors16, "FAIL: non-QB candidates should never be touched by this filter"
+print("PASS: QB1 lock override lets a genuine market anomaly through while still blocking an ordinarily-good 2nd QB.")
+
+roster16_full = Roster()
+roster16_full.add_player("Josh Allen", "QB", round_num=2)
+for pos, count in (("RB", 2), ("WR", 2), ("TE", 1)):
+    for i in range(count):
+        roster16_full.add_player(f"{pos} Filler {i}", pos, round_num=1)
+roster16_full.add_player("Flex Filler", "RB", round_num=1)  # fills FLEX -> no open starter slots left
+result16_full = _apply_qb1_lock_override(candidates16_df, roster16_full)
+assert "QB" not in set(result16_full["position"]), (
+    "FAIL: with no open starter-slot opportunity cost to weigh (only bench remains), the lock should stay absolute"
+)
+print("PASS: with every starter slot already filled, the lock stays absolute (no opportunity cost left to justify an override).")
