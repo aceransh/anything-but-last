@@ -30,6 +30,18 @@ supabase db push
 
 Or paste the migration SQL directly into the Supabase dashboard's SQL editor.
 
+## Deployment
+
+Deployed to Vercel as a Python serverless function -- a separate Vercel
+project from `../frontend`, with **Root Directory set to `backend`**.
+`api/index.py` re-exports the real FastAPI app from `app/main.py` (Vercel's
+Python runtime auto-detects an ASGI `app` under `api/`), and `vercel.json`
+rewrites every path to that one function so routes like `/health` and
+`/leagues` work without an `/api/` prefix. Set `SUPABASE_URL`,
+`SUPABASE_SERVICE_ROLE_KEY`, and `ALLOWED_ORIGINS` (include the frontend's
+Vercel URL) as environment variables in that Vercel project's settings --
+same values as your local `.env`.
+
 ## Auth model
 
 The frontend authenticates with Supabase Auth and sends the resulting JWT
