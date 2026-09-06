@@ -2,5 +2,15 @@
 __pycache__/
 *.log
 .env
+.env.local
+.env.*.local
 .DS_Store
 CLAUDE.md
+
+# frontend/ (Vite + React + TS)
+node_modules/
+dist/
+
+# supabase/ CLI local artifacts
+supabase/.branches/
+supabase/.temp/

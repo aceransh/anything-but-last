@@ -49,10 +49,14 @@ Network tab -> any request to api.fantasypros.com -> `x-api-key` request
 header.
 """
 
+import os
 from collections import Counter
 
 import pandas as pd
 import requests
+from dotenv import load_dotenv
+
+load_dotenv()
 
 YEAR = 2026
 RANKINGS_API_URL = f"https://api.fantasypros.com/v2/json/nfl/{YEAR}/consensus-rankings"
@@ -60,8 +64,9 @@ PROJECTIONS_API_URL = f"https://api.fantasypros.com/v2/json/nfl/{YEAR}/projectio
 OUTPUT_CSV = "data/projections_fp.csv"
 
 # See module docstring's Caveat section for what this is and how to refresh
-# it if it ever stops working.
-X_API_KEY = "zjxN52G3lP4fORpHRftGI2mTU8cTwxVNvkjByM3j"
+# it if it ever stops working (DevTools -> Network -> api.fantasypros.com ->
+# x-api-key request header).
+X_API_KEY = os.environ.get("FANTASYPROS_X_API_KEY")
 
 # Same aliases update_data.py already applies to RotoBaller data, for the
 # same reasons: FantasyPros' rankings feed uses "DST" while the rest of the
@@ -231,6 +236,12 @@ def build_draft_board() -> pd.DataFrame:
     the human-analyst consensus board) -- `adp` is left NaN for those rows,
     which the engine already handles gracefully (`.fillna(ADP_FALLBACK)`).
     """
+    if not X_API_KEY:
+        raise FantasyProsAPIError(
+            "FANTASYPROS_X_API_KEY is not set. Capture a fresh value from "
+            "DevTools -> Network tab -> any request to api.fantasypros.com "
+            "-> x-api-key request header, then set it in .env."
+        )
     ecr = fetch_ecr()
     real_adp = fetch_real_adp()
 

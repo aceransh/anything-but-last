@@ -1,11 +1,14 @@
 import json
 import os
 
+from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 from pydantic import BaseModel, field_validator
 
 from src.engine.draft_math_rb import POSITIONAL_TARGET
+
+load_dotenv()
 
 MODEL_NAME = "gemini-3.6-flash"
 
