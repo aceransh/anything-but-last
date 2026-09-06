@@ -14,3 +14,6 @@ dist/
 # supabase/ CLI local artifacts
 supabase/.branches/
 supabase/.temp/
+
+# Vercel CLI project-link cache
+.vercel/
