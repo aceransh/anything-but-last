@@ -18,7 +18,17 @@ export default function Login() {
     const { error: authError } =
       mode === "sign-in"
         ? await supabase.auth.signInWithPassword({ email, password })
-        : await supabase.auth.signUp({ email, password });
+        : await supabase.auth.signUp({
+            email,
+            password,
+            // Without this, Supabase falls back to the project's Auth
+            // "Site URL" setting for the confirmation email's redirect --
+            // wherever the app actually is (localhost in dev, the deployed
+            // URL in prod) still needs to be on that project's allowed
+            // redirect URLs list, or Supabase ignores this and falls back
+            // anyway.
+            options: { emailRedirectTo: window.location.origin },
+          });
 
     setSubmitting(false);
 
