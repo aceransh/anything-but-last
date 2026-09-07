@@ -8,6 +8,7 @@ interface League {
   sleeper_league_id: string;
   league_name: string;
   season: string;
+  sleeper_roster_id: number | null;
 }
 
 export default function Dashboard() {
@@ -38,7 +39,15 @@ export default function Dashboard() {
       <ul>
         {leagues?.map((league) => (
           <li key={league.id}>
-            {league.league_name} ({league.season})
+            <Link
+              to={
+                league.sleeper_roster_id === null
+                  ? `/leagues/${league.id}/select-roster`
+                  : `/leagues/${league.id}/lineup`
+              }
+            >
+              {league.league_name} ({league.season})
+            </Link>
           </li>
         ))}
       </ul>

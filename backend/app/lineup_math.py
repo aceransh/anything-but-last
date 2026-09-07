@@ -1,0 +1,72 @@
+"""Greedy weekly starting-lineup assignment. Same algorithm as
+`_optimal_lineup_value`/`_build_rostered_pool` in
+src/engine/draft_math_core.py -- top-N by projected points per fixed
+position slot, then the single best remaining FLEX-eligible player to
+FLEX -- generalized to read slot counts from a league's own
+`roster_positions` (so it isn't hardcoded to one league's structure) and
+extended to cover every fixed slot, including K/DEF, since a real
+start/sit decision needs both unlike the draft engine's win-probability
+model, which deliberately excludes them for an unrelated reason.
+"""
+
+FLEX_ELIGIBLE = {"RB", "WR", "TE"}
+
+# Only the standard single-position slots plus the standard FLEX are
+# handled -- SUPER_FLEX/WRRB_FLEX/etc. (other leagues' variants) aren't
+# recognized yet and are silently ignored if present, same as any other
+# unrecognized roster_positions entry (e.g. "BN", "IR", "TAXI").
+FIXED_POSITIONS = ("QB", "RB", "WR", "TE", "K", "DEF")
+
+
+def build_slot_requirements(roster_positions: list[str]) -> dict[str, int]:
+    """Tallies non-bench starting-slot counts from Sleeper's raw
+    roster_positions array, e.g. ["QB","RB","RB","WR","WR","TE","FLEX",
+    "K","DEF","BN","BN",...] -> {"QB": 1, "RB": 2, "WR": 2, "TE": 1,
+    "FLEX": 1, "K": 1, "DEF": 1}.
+    """
+    requirements: dict[str, int] = {}
+    for slot in roster_positions:
+        if slot in FIXED_POSITIONS or slot == "FLEX":
+            requirements[slot] = requirements.get(slot, 0) + 1
+    return requirements
+
+
+def optimize_lineup(players: list[dict], slot_requirements: dict[str, int]) -> dict:
+    """`players` is a list of {player_id, position, projected_points, ...}
+    (any extra keys, e.g. name/team/injury_status, are carried through
+    unchanged onto the returned starter/bench entries). Returns
+    {starters: [...], bench: [...], total_projected_points}.
+    """
+    used: set[str] = set()
+    starters: list[dict] = []
+
+    for position in FIXED_POSITIONS:
+        count = slot_requirements.get(position, 0)
+        if count == 0:
+            continue
+        ranked = sorted(
+            (p for p in players if p["position"] == position and p["player_id"] not in used),
+            key=lambda p: -p["projected_points"],
+        )
+        for p in ranked[:count]:
+            starters.append({**p, "slot": position})
+            used.add(p["player_id"])
+
+    flex_count = slot_requirements.get("FLEX", 0)
+    if flex_count:
+        flex_ranked = sorted(
+            (p for p in players if p["position"] in FLEX_ELIGIBLE and p["player_id"] not in used),
+            key=lambda p: -p["projected_points"],
+        )
+        for p in flex_ranked[:flex_count]:
+            starters.append({**p, "slot": "FLEX"})
+            used.add(p["player_id"])
+
+    bench = [p for p in players if p["player_id"] not in used]
+    total_projected_points = sum(p["projected_points"] for p in starters)
+
+    return {
+        "starters": starters,
+        "bench": bench,
+        "total_projected_points": total_projected_points,
+    }

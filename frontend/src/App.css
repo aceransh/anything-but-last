@@ -46,3 +46,9 @@ button {
 .error {
   color: #dc2626;
 }
+
+.injury-badge {
+  color: #dc2626;
+  font-weight: 600;
+  font-size: 0.85rem;
+}

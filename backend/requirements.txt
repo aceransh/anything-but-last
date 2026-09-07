@@ -5,3 +5,4 @@ pydantic-settings
 supabase
 pyjwt[crypto]
 requests
+pytest
