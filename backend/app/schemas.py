@@ -39,6 +39,14 @@ class LineupPlayer(BaseModel):
     team: str | None = None
     injury_status: str | None = None
     slot: str | None = None
+    same_team_stack_with: str | None = None  # a starter teammate's player_id, informational only
+
+
+class AlternateLineup(BaseModel):
+    starters: list[LineupPlayer]
+    bench: list[LineupPlayer]
+    total_projected_points: float
+    swapped_out: list[str]
 
 
 class LineupResponse(BaseModel):
@@ -47,3 +55,4 @@ class LineupResponse(BaseModel):
     bench: list[LineupPlayer]
     total_projected_points: float
     unresolved_player_ids: list[str] = []
+    alternate_lineup: AlternateLineup | None = None

@@ -52,3 +52,8 @@ button {
   font-weight: 600;
   font-size: 0.85rem;
 }
+
+.stack-badge {
+  color: #d97706;
+  font-size: 0.85rem;
+}

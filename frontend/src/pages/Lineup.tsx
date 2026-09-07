@@ -10,6 +10,14 @@ interface LineupPlayer {
   team: string | null;
   injury_status: string | null;
   slot: string | null;
+  same_team_stack_with: string | null;
+}
+
+interface AlternateLineup {
+  starters: LineupPlayer[];
+  bench: LineupPlayer[];
+  total_projected_points: number;
+  swapped_out: string[];
 }
 
 interface LineupResponse {
@@ -18,9 +26,16 @@ interface LineupResponse {
   bench: LineupPlayer[];
   total_projected_points: number;
   unresolved_player_ids: string[];
+  alternate_lineup: AlternateLineup | null;
 }
 
-function PlayerRow({ player }: { player: LineupPlayer }) {
+function PlayerRow({
+  player,
+  nameById,
+}: {
+  player: LineupPlayer;
+  nameById: Map<string, string>;
+}) {
   return (
     <li>
       {player.slot ? `${player.slot}: ` : ""}
@@ -28,6 +43,12 @@ function PlayerRow({ player }: { player: LineupPlayer }) {
       {player.team ? `, ${player.team}` : ""}) — {player.projected_points.toFixed(1)} pts
       {player.injury_status && (
         <span className="injury-badge"> {player.injury_status}</span>
+      )}
+      {player.same_team_stack_with && (
+        <span className="stack-badge">
+          {" "}
+          shares targets with {nameById.get(player.same_team_stack_with) ?? player.same_team_stack_with}
+        </span>
       )}
     </li>
   );
@@ -38,10 +59,12 @@ export default function Lineup() {
   const [week, setWeek] = useState<number | null>(null);
   const [lineup, setLineup] = useState<LineupResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [showAlternate, setShowAlternate] = useState(false);
 
   useEffect(() => {
     setLineup(null);
     setError(null);
+    setShowAlternate(false);
     const query = week ? `?week=${week}` : "";
     apiFetch(`/leagues/${leagueId}/lineup${query}`)
       .then((res) => res.json())
@@ -54,24 +77,45 @@ export default function Lineup() {
       );
   }, [leagueId, week]);
 
+  const nameById = new Map(
+    lineup ? lineup.starters.map((p) => [p.player_id, p.name ?? p.player_id]) : [],
+  );
+
+  const active = showAlternate && lineup?.alternate_lineup ? lineup.alternate_lineup : lineup;
+
   return (
     <div className="page">
       <h1>Week {week ?? "..."} Lineup</h1>
       {error && <p className="error">{error}</p>}
       {!lineup && !error && <p>Loading...</p>}
-      {lineup && (
+      {lineup && active && (
         <>
-          <p>Projected total: {lineup.total_projected_points.toFixed(1)} pts</p>
+          <p>Projected total: {active.total_projected_points.toFixed(1)} pts</p>
+          {lineup.alternate_lineup && (
+            <button type="button" onClick={() => setShowAlternate(!showAlternate)}>
+              {showAlternate ? "Show original lineup" : "Show alternate lineup (avoids same-team stacks)"}
+            </button>
+          )}
+          {showAlternate && lineup.alternate_lineup && (
+            <p>
+              Swaps out{" "}
+              {lineup.alternate_lineup.swapped_out
+                .map((id) => nameById.get(id) ?? id)
+                .join(", ")}{" "}
+              for the cost of {(lineup.total_projected_points - lineup.alternate_lineup.total_projected_points).toFixed(1)}{" "}
+              projected points.
+            </p>
+          )}
           <h2>Starters</h2>
           <ul>
-            {lineup.starters.map((p) => (
-              <PlayerRow key={p.player_id} player={p} />
+            {active.starters.map((p) => (
+              <PlayerRow key={p.player_id} player={p} nameById={nameById} />
             ))}
           </ul>
           <h2>Bench</h2>
           <ul>
-            {lineup.bench.map((p) => (
-              <PlayerRow key={p.player_id} player={p} />
+            {active.bench.map((p) => (
+              <PlayerRow key={p.player_id} player={p} nameById={nameById} />
             ))}
           </ul>
           {lineup.unresolved_player_ids.length > 0 && (

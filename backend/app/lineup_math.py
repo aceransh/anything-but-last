@@ -70,3 +70,67 @@ def optimize_lineup(players: list[dict], slot_requirements: dict[str, int]) -> d
         "bench": bench,
         "total_projected_points": total_projected_points,
     }
+
+
+# Same pass-catcher pairing rule as _same_team_stack_penalty in
+# src/engine/draft_math_core.py (WR-WR and WR-TE only) -- real fantasy
+# research backs specifically these two pairings as genuine target
+# competition; QB and RB pairings are deliberately excluded there for
+# reasons that apply here too (QB+pass-catcher is a well-known positive
+# correlation, RB production is driven by rushing/goal-line volume,
+# largely orthogonal to passing-game targets). This is informational
+# only here, not a scoring penalty -- see the plan's reasoning for why a
+# penalty risks double-counting a correlation the projections may
+# already reflect.
+STACK_ELIGIBLE_POSITIONS = {"WR", "TE"}
+
+
+def detect_same_team_stacks(starters: list[dict]) -> list[tuple[str, str]]:
+    """Returns (player_id, player_id) pairs among the given starters that
+    are same-team WR/WR or WR/TE -- i.e. at least one of the pair is a WR.
+    A team with 3+ flagged pass-catchers among starters produces multiple
+    pairs, one per combination, not just adjacent ones.
+    """
+    pass_catchers = [p for p in starters if p["position"] in STACK_ELIGIBLE_POSITIONS and p.get("team")]
+    pairs = []
+    for i, a in enumerate(pass_catchers):
+        for b in pass_catchers[i + 1 :]:
+            if a["team"] != b["team"]:
+                continue
+            if a["position"] == "WR" or b["position"] == "WR":
+                pairs.append((a["player_id"], b["player_id"]))
+    return pairs
+
+
+def build_alternate_lineup(
+    players: list[dict], slot_requirements: dict[str, int], stacks: list[tuple[str, str]]
+) -> dict | None:
+    """A single deterministic diversification pass: for each flagged
+    same-team pair, drops the lower-projected member from consideration
+    and re-runs the same greedy optimizer on what's left -- pulling in
+    the next-best alternative for that slot, if one exists. Not a
+    recursive/iterative de-stacker (a replacement could theoretically
+    still stack with something else); one pass covers the common case
+    without the edge cases a fully general solver would need to handle.
+    Returns None if there are no stacks to break (nothing to offer).
+    """
+    if not stacks:
+        return None
+
+    by_id = {p["player_id"]: p for p in players}
+    excluded: set[str] = set()
+    for a_id, b_id in stacks:
+        lower_id = a_id if by_id[a_id]["projected_points"] <= by_id[b_id]["projected_points"] else b_id
+        excluded.add(lower_id)
+
+    alt_pool = [p for p in players if p["player_id"] not in excluded]
+    result = optimize_lineup(alt_pool, slot_requirements)
+
+    # The excluded player is still on the roster -- just not eligible to
+    # start in this alternate lineup, not dropped entirely. optimize_lineup
+    # only saw alt_pool, so its own bench list is missing them; rebuild
+    # bench against the full roster instead.
+    starter_ids = {p["player_id"] for p in result["starters"]}
+    result["bench"] = [p for p in players if p["player_id"] not in starter_ids]
+    result["swapped_out"] = sorted(excluded)
+    return result

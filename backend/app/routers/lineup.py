@@ -2,8 +2,13 @@ import requests
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ..deps import UserContext, get_current_user
-from ..lineup_math import build_slot_requirements, optimize_lineup
-from ..schemas import LineupResponse
+from ..lineup_math import (
+    build_alternate_lineup,
+    build_slot_requirements,
+    detect_same_team_stacks,
+    optimize_lineup,
+)
+from ..schemas import AlternateLineup, LineupResponse
 from .leagues import get_owned_league
 
 router = APIRouter()
@@ -89,10 +94,26 @@ def get_lineup(
     unresolved_player_ids = sorted(roster_player_ids - resolved_ids)
 
     result = optimize_lineup(players, slot_requirements)
+    stacks = detect_same_team_stacks(result["starters"])
+
+    # Informational only -- flag each stacked starter with one teammate's
+    # id (a 3-way stack has multiple pairs; showing one partner is enough
+    # context for a badge, not an exhaustive listing).
+    stack_partner: dict[str, str] = {}
+    for a_id, b_id in stacks:
+        stack_partner.setdefault(a_id, b_id)
+        stack_partner.setdefault(b_id, a_id)
+    for starter in result["starters"]:
+        starter["same_team_stack_with"] = stack_partner.get(starter["player_id"])
+
+    alternate = build_alternate_lineup(players, slot_requirements, stacks)
+    alternate_lineup = AlternateLineup(**alternate) if alternate else None
+
     return LineupResponse(
         week=week,
         starters=result["starters"],
         bench=result["bench"],
         total_projected_points=result["total_projected_points"],
         unresolved_player_ids=unresolved_player_ids,
+        alternate_lineup=alternate_lineup,
     )

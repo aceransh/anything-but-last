@@ -1,4 +1,9 @@
-from app.lineup_math import build_slot_requirements, optimize_lineup
+from app.lineup_math import (
+    build_alternate_lineup,
+    build_slot_requirements,
+    detect_same_team_stacks,
+    optimize_lineup,
+)
 
 # Real roster_positions verified live against Sleeper for the league used
 # in manual end-to-end testing (league 1389388817651236864).
@@ -73,3 +78,59 @@ def test_optimize_lineup_carries_extra_fields_through():
     players = [{"player_id": "qb1", "position": "QB", "projected_points": 20, "name": "Test QB"}]
     result = optimize_lineup(players, {"QB": 1})
     assert result["starters"][0]["name"] == "Test QB"
+
+
+def _pc(player_id, position, projected_points, team):
+    return {"player_id": player_id, "position": position, "projected_points": projected_points, "team": team}
+
+
+def test_detect_same_team_stacks_flags_wr_wr():
+    starters = [_pc("wr_a", "WR", 14.0, "CAR"), _pc("wr_b", "WR", 12.1, "CAR")]
+    assert detect_same_team_stacks(starters) == [("wr_a", "wr_b")]
+
+
+def test_detect_same_team_stacks_flags_wr_te():
+    starters = [_pc("wr_a", "WR", 14.0, "CAR"), _pc("te_a", "TE", 9.0, "CAR")]
+    assert detect_same_team_stacks(starters) == [("wr_a", "te_a")]
+
+
+def test_detect_same_team_stacks_ignores_different_teams():
+    starters = [_pc("wr_a", "WR", 14.0, "CAR"), _pc("wr_b", "WR", 12.1, "DAL")]
+    assert detect_same_team_stacks(starters) == []
+
+
+def test_detect_same_team_stacks_ignores_te_te_and_rb_pairs():
+    starters = [
+        _pc("te_a", "TE", 9.0, "CAR"),
+        _pc("te_b", "TE", 6.0, "CAR"),
+        {"player_id": "rb_a", "position": "RB", "projected_points": 10.0, "team": "CAR"},
+        {"player_id": "rb_b", "position": "RB", "projected_points": 8.0, "team": "CAR"},
+    ]
+    assert detect_same_team_stacks(starters) == []
+
+
+def test_build_alternate_lineup_swaps_lower_scorer_for_bench_alternative():
+    players = [
+        _pc("wr_a", "WR", 14.0, "CAR"),
+        _pc("wr_b", "WR", 12.1, "CAR"),  # lower of the CAR pair -- should get swapped out
+        _pc("wr_bench", "WR", 11.9, "NE"),  # next-best alternative
+    ]
+    slot_requirements = {"WR": 2}
+    primary = optimize_lineup(players, slot_requirements)
+    stacks = detect_same_team_stacks(primary["starters"])
+    assert stacks == [("wr_a", "wr_b")]
+
+    alt = build_alternate_lineup(players, slot_requirements, stacks)
+
+    assert alt is not None
+    alt_starter_ids = {p["player_id"] for p in alt["starters"]}
+    assert alt_starter_ids == {"wr_a", "wr_bench"}
+    assert alt["swapped_out"] == ["wr_b"]
+    # The swapped-out player is benched, not dropped from the roster
+    # entirely -- a real bug caught by manual testing before this test
+    # existed.
+    assert {p["player_id"] for p in alt["bench"]} == {"wr_b"}
+
+
+def test_build_alternate_lineup_returns_none_when_no_stacks():
+    assert build_alternate_lineup([], {}, []) is None
