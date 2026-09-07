@@ -1,7 +1,9 @@
 from app.lineup_math import (
     build_alternate_lineup,
     build_slot_requirements,
+    classify_unresolved_players,
     detect_same_team_stacks,
+    is_injury_warning,
     optimize_lineup,
 )
 
@@ -134,3 +136,35 @@ def test_build_alternate_lineup_swaps_lower_scorer_for_bench_alternative():
 
 def test_build_alternate_lineup_returns_none_when_no_stacks():
     assert build_alternate_lineup([], {}, []) is None
+
+
+def test_is_injury_warning_flags_out_and_similar_statuses():
+    for status in ("Out", "Doubtful", "IR", "PUP", "Suspended"):
+        assert is_injury_warning(status) is True
+
+
+def test_is_injury_warning_excludes_questionable_and_none():
+    assert is_injury_warning("Questionable") is False
+    assert is_injury_warning(None) is False
+
+
+def test_classify_unresolved_players_confirms_def_bye_from_team_code():
+    # KC's real 2026 bye is week 5 (bye_weeks.py) -- a DEF's player_id is
+    # literally its team code, so this needs no roster/network lookup.
+    result = classify_unresolved_players(["KC"], "2026", 5)
+    assert result == [{"player_id": "KC", "reason": "bye"}]
+
+
+def test_classify_unresolved_players_def_not_on_bye_falls_back():
+    # KC isn't on bye in week 1 -- an unresolved DEF here is unexpected,
+    # but should degrade to "no_projection" rather than a wrong "bye".
+    result = classify_unresolved_players(["KC"], "2026", 1)
+    assert result == [{"player_id": "KC", "reason": "no_projection"}]
+
+
+def test_classify_unresolved_players_skill_position_id_is_no_projection():
+    # A real Sleeper skill-position player_id (numeric string), not a
+    # team code -- can't be confirmed as a bye without the full player
+    # list, so it falls back to the generic reason.
+    result = classify_unresolved_players(["4046"], "2026", 5)
+    assert result == [{"player_id": "4046", "reason": "no_projection"}]

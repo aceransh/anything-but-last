@@ -5,7 +5,9 @@ from ..deps import UserContext, get_current_user
 from ..lineup_math import (
     build_alternate_lineup,
     build_slot_requirements,
+    classify_unresolved_players,
     detect_same_team_stacks,
+    is_injury_warning,
     optimize_lineup,
 )
 from ..schemas import AlternateLineup, LineupResponse
@@ -91,7 +93,9 @@ def get_lineup(
         )
         resolved_ids.add(player_id)
 
-    unresolved_player_ids = sorted(roster_player_ids - resolved_ids)
+    unresolved_players = classify_unresolved_players(
+        sorted(roster_player_ids - resolved_ids), season, week
+    )
 
     result = optimize_lineup(players, slot_requirements)
     stacks = detect_same_team_stacks(result["starters"])
@@ -105,6 +109,7 @@ def get_lineup(
         stack_partner.setdefault(b_id, a_id)
     for starter in result["starters"]:
         starter["same_team_stack_with"] = stack_partner.get(starter["player_id"])
+        starter["injury_warning"] = is_injury_warning(starter.get("injury_status"))
 
     alternate = build_alternate_lineup(players, slot_requirements, stacks)
     alternate_lineup = AlternateLineup(**alternate) if alternate else None
@@ -114,6 +119,6 @@ def get_lineup(
         starters=result["starters"],
         bench=result["bench"],
         total_projected_points=result["total_projected_points"],
-        unresolved_player_ids=unresolved_player_ids,
+        unresolved_players=unresolved_players,
         alternate_lineup=alternate_lineup,
     )

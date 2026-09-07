@@ -40,6 +40,7 @@ class LineupPlayer(BaseModel):
     injury_status: str | None = None
     slot: str | None = None
     same_team_stack_with: str | None = None  # a starter teammate's player_id, informational only
+    injury_warning: bool = False  # True for starters whose status means "likely/definitely not playing"
 
 
 class AlternateLineup(BaseModel):
@@ -49,10 +50,15 @@ class AlternateLineup(BaseModel):
     swapped_out: list[str]
 
 
+class UnresolvedPlayer(BaseModel):
+    player_id: str
+    reason: str  # "bye" (confirmed, DEF only) or "no_projection" (likely bye or unmodeled)
+
+
 class LineupResponse(BaseModel):
     week: int
     starters: list[LineupPlayer]
     bench: list[LineupPlayer]
     total_projected_points: float
-    unresolved_player_ids: list[str] = []
+    unresolved_players: list[UnresolvedPlayer] = []
     alternate_lineup: AlternateLineup | None = None

@@ -9,6 +9,8 @@ start/sit decision needs both unlike the draft engine's win-probability
 model, which deliberately excludes them for an unrelated reason.
 """
 
+from .bye_weeks import team_bye_week
+
 FLEX_ELIGIBLE = {"RB", "WR", "TE"}
 
 # Only the standard single-position slots plus the standard FLEX are
@@ -100,6 +102,39 @@ def detect_same_team_stacks(starters: list[dict]) -> list[tuple[str, str]]:
             if a["position"] == "WR" or b["position"] == "WR":
                 pairs.append((a["player_id"], b["player_id"]))
     return pairs
+
+
+# Statuses meaning "likely or definitely not playing" -- these get a loud
+# starter warning. "Questionable" is common and usually means the player
+# does play, so it stays a passive badge only (injury_status is already
+# shown on every player row regardless of this set).
+INJURY_WARNING_STATUSES = {"Out", "Doubtful", "IR", "PUP", "Suspended"}
+
+
+def is_injury_warning(injury_status: str | None) -> bool:
+    return injury_status in INJURY_WARNING_STATUSES
+
+
+def classify_unresolved_player(player_id: str, season: str, week: int) -> str:
+    """A rostered player missing a projection row this week is either on
+    a bye or genuinely unmodeled by Sleeper. We can only confirm "bye"
+    for DEF entries, whose player_id is literally its team code (Sleeper's
+    convention) -- checking that code's bye week against the requested
+    week needs no network call, just the static table in bye_weeks.py.
+    Skill-position players can't be confirmed this way (see bye_weeks.py's
+    docstring for why) and fall back to "no_projection" -- in practice
+    almost always a bye too, just not confirmable this cheaply.
+    """
+    if team_bye_week(season, player_id) == week:
+        return "bye"
+    return "no_projection"
+
+
+def classify_unresolved_players(player_ids: list[str], season: str, week: int) -> list[dict]:
+    return [
+        {"player_id": player_id, "reason": classify_unresolved_player(player_id, season, week)}
+        for player_id in player_ids
+    ]
 
 
 def build_alternate_lineup(

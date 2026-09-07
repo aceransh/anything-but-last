@@ -11,6 +11,7 @@ interface LineupPlayer {
   injury_status: string | null;
   slot: string | null;
   same_team_stack_with: string | null;
+  injury_warning: boolean;
 }
 
 interface AlternateLineup {
@@ -20,12 +21,17 @@ interface AlternateLineup {
   swapped_out: string[];
 }
 
+interface UnresolvedPlayer {
+  player_id: string;
+  reason: "bye" | "no_projection";
+}
+
 interface LineupResponse {
   week: number;
   starters: LineupPlayer[];
   bench: LineupPlayer[];
   total_projected_points: number;
-  unresolved_player_ids: string[];
+  unresolved_players: UnresolvedPlayer[];
   alternate_lineup: AlternateLineup | null;
 }
 
@@ -41,8 +47,10 @@ function PlayerRow({
       {player.slot ? `${player.slot}: ` : ""}
       {player.name ?? player.player_id} ({player.position}
       {player.team ? `, ${player.team}` : ""}) — {player.projected_points.toFixed(1)} pts
-      {player.injury_status && (
-        <span className="injury-badge"> {player.injury_status}</span>
+      {player.injury_warning ? (
+        <span className="injury-warning"> ⚠ Starting a player who is {player.injury_status}</span>
+      ) : (
+        player.injury_status && <span className="injury-badge"> {player.injury_status}</span>
       )}
       {player.same_team_stack_with && (
         <span className="stack-badge">
@@ -118,9 +126,22 @@ export default function Lineup() {
               <PlayerRow key={p.player_id} player={p} nameById={nameById} />
             ))}
           </ul>
-          {lineup.unresolved_player_ids.length > 0 && (
+          {lineup.unresolved_players.some((p) => p.reason === "bye") && (
+            <p>
+              On bye:{" "}
+              {lineup.unresolved_players
+                .filter((p) => p.reason === "bye")
+                .map((p) => p.player_id)
+                .join(", ")}
+            </p>
+          )}
+          {lineup.unresolved_players.some((p) => p.reason === "no_projection") && (
             <p className="error">
-              No projection available this week for: {lineup.unresolved_player_ids.join(", ")}
+              No projection available this week (likely on bye or unmodeled):{" "}
+              {lineup.unresolved_players
+                .filter((p) => p.reason === "no_projection")
+                .map((p) => p.player_id)
+                .join(", ")}
             </p>
           )}
         </>
