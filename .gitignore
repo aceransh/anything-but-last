@@ -17,3 +17,5 @@ supabase/.temp/
 
 # Vercel CLI project-link cache
 .vercel/
+.vercel
+.env*

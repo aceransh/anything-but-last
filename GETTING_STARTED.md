@@ -19,7 +19,8 @@ It's not a static cheat sheet — it recalculates its recommendations after ever
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 
-# 2. Add your Gemini API key (optional but recommended)
+# 2. Add your Gemini API key (optional but recommended) -- either
+# export it directly, or copy .env.example to .env and fill it in there
 export GEMINI_API_KEY=your_key_here
 
 # 3. Run it

@@ -26,6 +26,8 @@ Python · pandas · FastAPI · vanilla JS (no frontend framework) · Google Gemi
 
 No LangChain, no agent framework, no database. Deliberately — see [why](#why-no-agent-framework) below.
 
+A second, separate app for in-season features (not draft day) is deployed alongside this one — see [Season tools](#season-tools) below for that stack.
+
 ## How it works
 
 ```text
@@ -72,6 +74,8 @@ A few decisions and bugs worth calling out, since they're the actual interesting
 
 **Duplication that was the right call, until it wasn't.** Each new data-source variant had originally been built as a full, independent copy of the scoring engine — a deliberate choice: no shared abstraction meant no risk of one source's fix silently breaking another. That stopped being free the moment a fix needed to land in four near-identical ~1000-line files at once, which happened three times in a single session. Rather than parameterize preemptively at the start (when only one variant existed and the "right" abstraction boundary wasn't yet knowable), the duplication was left alone until the actual pain showed up — then collapsed into one shared module with each source supplying only its real differences as explicit function arguments, never a closure or a monkeypatched global. One source that outgrew a simple parameter swap (a dual-track ADP model touching several call sites at once) was deliberately left out of the consolidation rather than forced to fit — verified as a pure reorganization, not a behavior change, by rerunning the full existing regression suite (every rule, every simulated draft, the cross-engine comparison) and confirming byte-identical output before and after.
 
+**A platform's own "fix" broke every route identically, in a way that looked like the app's own bug.** Deploying the season-tools backend (below) to Vercel, a manual rewrite rule sending every request path to one function 404'd every route — including the framework's own auto-generated `/docs` endpoint, which meant it couldn't be a routing typo in this app's own code. The actual cause was on the platform side: Vercel's build log itself warned that rewrite destinations are now passed to backend functions as the literal request path, not just used to pick which function handles a request — a recent, documented behavior change that inverted what the rewrite used to do. The fix was deleting the rewrite entirely; the platform's own zero-config framework detection already routed everything correctly without it. Read the build log before assuming a 404 is your own code.
+
 ## Why no agent framework
 
 The project's binding constraint is a 30-second real-time clock. Agentic loops, multi-step tool chaining, and heavy framework overhead all trade latency for flexibility this use case can't afford — the LLM's entire job is one JSON-in, JSON-out call at the very end of an already-fast pipeline, not a decision-maker with tool access.
@@ -85,13 +89,23 @@ src/
   llm/       Gemini call, prompt, and local fallback
   ui/        FastAPI server + single-page dashboard
 data/        static player projections (CSV)
+
+backend/     season-tools API (FastAPI, deployed to Vercel)
+frontend/    season-tools web app (React + TypeScript, deployed to Vercel)
+supabase/    season-tools schema migrations
 ```
 
 See [GETTING_STARTED.md](GETTING_STARTED.md) for setup, usage, and a plainer-language walkthrough of the math.
 
+## Season tools
+
+The draft copilot above covers exactly one day of the fantasy season. A second, separate, deployed web app is the start of covering the other ~17 weeks — currently just the foundation (auth, database, hosting), no season-long features yet. React + TypeScript frontend, FastAPI backend, Supabase (Postgres + Auth), both halves deployed on Vercel. Live: sign up, connect a Sleeper league by ID, see it on a dashboard — the minimum real slice proving the whole chain works before any actual fantasy-management logic gets built on top of it.
+
+It's a deliberately separate app from the draft copilot, not an extension of it — the draft tool's whole architecture (in-memory state, single background thread, no auth, no persistence) is built around a 30-second live pick clock and a single local user; this one needs multi-user auth and a real database, neither of which the draft tool needs or should take on.
+
 ## Future improvements
 
-The app currently helps for exactly one day of the fantasy season — draft day. Everything below is aimed at the other ~17 weeks, researched and scoped but not yet built. One constraint shapes all of it: Sleeper's API is entirely read-only, so this can only ever be a copilot that tells you exactly what to do — not an autopilot that does it for you.
+Draft day is covered. Everything below is aimed at the other ~17 weeks, researched and scoped, and now has real infrastructure to build on (see [Season tools](#season-tools) above) — but none of it is built yet. One constraint shapes all of it: Sleeper's API is entirely read-only, so this can only ever be a copilot that tells you exactly what to do — not an autopilot that does it for you.
 
 - **Weekly lineup optimizer.** The most natural next build, and the biggest gap: right now the app goes silent the moment the draft ends. Real per-week player projections turned out to be one parameter change away on a data source already integrated, not a new one to go find — so this reuses the existing lineup-optimizer math almost as-is, just pointed at "who should start this week" instead of "who should I draft."
 - **Injury and bye-week warnings.** A lineup check that flags a starter who's actually on a bye or banged up before you lock it in, using the same roster data the optimizer above already needs.
