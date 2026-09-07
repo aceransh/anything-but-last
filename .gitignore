@@ -7,6 +7,11 @@ __pycache__/
 .DS_Store
 CLAUDE.md
 
+# Research PDFs the user supplies -- reference material for Claude/future
+# sessions, same "not part of the public repo" treatment as CLAUDE.md
+# itself, not portfolio-facing content.
+docs/research/
+
 # frontend/ (Vite + React + TS)
 node_modules/
 dist/

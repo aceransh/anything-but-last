@@ -99,6 +99,10 @@ None of these need a login or an API key you have to set up yourself — refresh
 
 **No recommendations showing up** — recommendations only appear once you're on the clock. Before that, you'll still see the live shortlist of top available players, just without a specific pick called out.
 
+## After the draft
+
+This app also has a second, separate, always-on web app for the rest of the season (weekly lineup recommendations, more to come) — nothing to install, it's already deployed. See the [Season tools](README.md#season-tools) section of the README for what it does and the live link.
+
 ## For developers
 
 Manual regression scripts (not pytest — run directly):
