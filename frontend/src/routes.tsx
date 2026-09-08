@@ -1,15 +1,17 @@
 import type { ReactNode } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
+import LeagueLayout from "./components/LeagueLayout";
 import { useAuth } from "./lib/AuthContext";
 import ConnectLeague from "./pages/ConnectLeague";
 import Dashboard from "./pages/Dashboard";
 import Lineup from "./pages/Lineup";
 import Login from "./pages/Login";
 import SelectRoster from "./pages/SelectRoster";
+import Trade from "./pages/Trade";
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { session, loading } = useAuth();
-  if (loading) return <p>Loading...</p>;
+  if (loading) return <p className="p-6 text-muted-foreground">Loading...</p>;
   if (!session) return <Navigate to="/login" replace />;
   return <>{children}</>;
 }
@@ -43,13 +45,16 @@ export default function AppRoutes() {
         }
       />
       <Route
-        path="/leagues/:leagueId/lineup"
+        path="/leagues/:leagueId"
         element={
           <RequireAuth>
-            <Lineup />
+            <LeagueLayout />
           </RequireAuth>
         }
-      />
+      >
+        <Route path="lineup" element={<Lineup />} />
+        <Route path="trade" element={<Trade />} />
+      </Route>
     </Routes>
   );
 }

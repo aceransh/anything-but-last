@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import Avatar from "@/components/Avatar";
+import Card from "@/components/Card";
 import { apiFetch } from "../lib/api";
 
 interface RosterOption {
@@ -39,19 +41,23 @@ export default function SelectRoster() {
   }
 
   return (
-    <div className="page">
-      <h1>Which team is yours?</h1>
-      {error && <p className="error">{error}</p>}
-      {rosters === null && !error && <p>Loading...</p>}
-      <ul>
+    <div className="mx-auto max-w-md px-4 py-12">
+      <h1 className="mb-6 text-xl font-bold text-foreground">Which team is yours?</h1>
+      {error && <p className="mb-4 text-sm text-destructive">{error}</p>}
+      {rosters === null && !error && <p className="text-muted-foreground">Loading...</p>}
+      <ul className="space-y-2">
         {rosters?.map((roster) => (
           <li key={roster.sleeper_roster_id}>
             <button
               type="button"
               disabled={claiming}
               onClick={() => claim(roster.sleeper_roster_id)}
+              className="w-full disabled:opacity-50"
             >
-              {roster.owner_display_name}
+              <Card className="flex items-center gap-3 transition-colors hover:bg-secondary/60">
+                <Avatar name={roster.owner_display_name} />
+                <span className="font-medium text-foreground">{roster.owner_display_name}</span>
+              </Card>
             </button>
           </li>
         ))}

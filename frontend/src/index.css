@@ -1,8 +1,83 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "@fontsource-variable/geist";
+
+/* Sleeper-matched palette, set directly as shadcn's own semantic tokens --
+   this app is dark-only (matching Sleeper, which has no light mode), so
+   there's no .dark variant to maintain in parallel. */
 :root {
-  color-scheme: light dark;
-  font-family: system-ui, -apple-system, sans-serif;
+  color-scheme: dark;
+
+  --background: #0b0d14;
+  --foreground: #e8e9ed;
+
+  --card: #171a24;
+  --card-foreground: #e8e9ed;
+  --popover: #171a24;
+  --popover-foreground: #e8e9ed;
+
+  --primary: #00ceb8;
+  --primary-foreground: #0b0d14;
+  --secondary: #1f2330;
+  --secondary-foreground: #e8e9ed;
+
+  --muted: #1f2330;
+  --muted-foreground: #8b8fa3;
+  --accent: #1f2330;
+  --accent-foreground: #e8e9ed;
+
+  --destructive: #ef4444;
+  --border: #2a2e3d;
+  --input: #2a2e3d;
+  --ring: #00ceb8;
+
+  --radius: 0.625rem;
 }
 
-body {
-  margin: 0;
+@theme inline {
+  --font-sans: 'Geist Variable', sans-serif;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+}
+
+/* Position badge colors -- one per fantasy position, matching Sleeper's own
+   color-coded tags (see PositionBadge / components/Badge.tsx). */
+@theme {
+  --color-pos-qb: #ec4899;
+  --color-pos-rb: #14b8a6;
+  --color-pos-wr: #3b82f6;
+  --color-pos-te: #f97316;
+  --color-pos-k: #a855f7;
+  --color-pos-def: #6b7280;
+  --color-pos-unknown: #6b7280;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    margin: 0;
+  }
 }

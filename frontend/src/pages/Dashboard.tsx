@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import Avatar from "@/components/Avatar";
+import Card from "@/components/Card";
+import { Button } from "@/components/ui/button";
 import { apiFetch } from "../lib/api";
 import { supabase } from "../lib/supabaseClient";
 
@@ -25,18 +28,20 @@ export default function Dashboard() {
   }, []);
 
   return (
-    <div className="page">
-      <div className="page-header">
-        <h1>Your Leagues</h1>
-        <button type="button" onClick={() => supabase.auth.signOut()}>
+    <div className="mx-auto max-w-2xl px-4 py-10">
+      <div className="mb-6 flex items-center justify-between">
+        <h1 className="text-2xl font-bold text-foreground">Your Leagues</h1>
+        <Button variant="outline" onClick={() => supabase.auth.signOut()}>
           Sign out
-        </button>
+        </Button>
       </div>
-      <Link to="/connect-league">Connect a league</Link>
-      {error && <p className="error">{error}</p>}
-      {leagues === null && !error && <p>Loading...</p>}
-      {leagues?.length === 0 && <p>No leagues connected yet.</p>}
-      <ul>
+      <Link to="/connect-league" className="text-sm text-primary underline-offset-4 hover:underline">
+        Connect a league
+      </Link>
+      {error && <p className="mt-4 text-sm text-destructive">{error}</p>}
+      {leagues === null && !error && <p className="mt-4 text-muted-foreground">Loading...</p>}
+      {leagues?.length === 0 && <p className="mt-4 text-muted-foreground">No leagues connected yet.</p>}
+      <ul className="mt-4 space-y-2">
         {leagues?.map((league) => (
           <li key={league.id}>
             <Link
@@ -46,7 +51,13 @@ export default function Dashboard() {
                   : `/leagues/${league.id}/lineup`
               }
             >
-              {league.league_name} ({league.season})
+              <Card className="flex items-center gap-3 transition-colors hover:bg-secondary/60">
+                <Avatar name={league.league_name} />
+                <div>
+                  <div className="font-medium text-foreground">{league.league_name}</div>
+                  <div className="text-xs text-muted-foreground">{league.season}</div>
+                </div>
+              </Card>
             </Link>
           </li>
         ))}

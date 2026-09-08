@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
+import Card from "@/components/Card";
+import PlayerRow from "@/components/PlayerRow";
+import { Button } from "@/components/ui/button";
 import { apiFetch } from "../lib/api";
 
 interface LineupPlayer {
@@ -35,30 +38,28 @@ interface LineupResponse {
   alternate_lineup: AlternateLineup | null;
 }
 
-function PlayerRow({
-  player,
-  nameById,
-}: {
-  player: LineupPlayer;
-  nameById: Map<string, string>;
-}) {
+function PlayerList({ players, nameById }: { players: LineupPlayer[]; nameById: Map<string, string> }) {
   return (
-    <li>
-      {player.slot ? `${player.slot}: ` : ""}
-      {player.name ?? player.player_id} ({player.position}
-      {player.team ? `, ${player.team}` : ""}) — {player.projected_points.toFixed(1)} pts
-      {player.injury_warning ? (
-        <span className="injury-warning"> ⚠ Starting a player who is {player.injury_status}</span>
-      ) : (
-        player.injury_status && <span className="injury-badge"> {player.injury_status}</span>
-      )}
-      {player.same_team_stack_with && (
-        <span className="stack-badge">
-          {" "}
-          shares targets with {nameById.get(player.same_team_stack_with) ?? player.same_team_stack_with}
-        </span>
-      )}
-    </li>
+    <ul>
+      {players.map((p) => (
+        <PlayerRow
+          key={p.player_id}
+          playerId={p.player_id}
+          position={p.position}
+          name={p.name}
+          team={p.team}
+          points={p.projected_points}
+          injuryStatus={p.injury_status}
+          injuryLoud={p.injury_warning}
+          slot={p.slot}
+          note={
+            p.same_team_stack_with
+              ? `Shares targets with ${nameById.get(p.same_team_stack_with) ?? p.same_team_stack_with}`
+              : undefined
+          }
+        />
+      ))}
+    </ul>
   );
 }
 
@@ -92,42 +93,47 @@ export default function Lineup() {
   const active = showAlternate && lineup?.alternate_lineup ? lineup.alternate_lineup : lineup;
 
   return (
-    <div className="page">
-      <h1>Week {week ?? "..."} Lineup</h1>
-      {error && <p className="error">{error}</p>}
-      {!lineup && !error && <p>Loading...</p>}
+    <div className="mx-auto max-w-2xl">
+      <h1 className="mb-1 text-xl font-bold text-foreground">Week {week ?? "..."} Lineup</h1>
+      {error && <p className="text-sm text-destructive">{error}</p>}
+      {!lineup && !error && <p className="text-muted-foreground">Loading...</p>}
       {lineup && active && (
-        <>
-          <p>Projected total: {active.total_projected_points.toFixed(1)} pts</p>
-          {lineup.alternate_lineup && (
-            <button type="button" onClick={() => setShowAlternate(!showAlternate)}>
-              {showAlternate ? "Show original lineup" : "Show alternate lineup (avoids same-team stacks)"}
-            </button>
-          )}
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-muted-foreground">
+              Projected total:{" "}
+              <span className="font-semibold text-foreground">
+                {active.total_projected_points.toFixed(1)} pts
+              </span>
+            </p>
+            {lineup.alternate_lineup && (
+              <Button variant="outline" size="sm" onClick={() => setShowAlternate(!showAlternate)}>
+                {showAlternate ? "Show original lineup" : "Show de-stacked alternate"}
+              </Button>
+            )}
+          </div>
           {showAlternate && lineup.alternate_lineup && (
-            <p>
+            <p className="text-sm text-amber-500">
               Swaps out{" "}
-              {lineup.alternate_lineup.swapped_out
-                .map((id) => nameById.get(id) ?? id)
-                .join(", ")}{" "}
-              for the cost of {(lineup.total_projected_points - lineup.alternate_lineup.total_projected_points).toFixed(1)}{" "}
+              {lineup.alternate_lineup.swapped_out.map((id) => nameById.get(id) ?? id).join(", ")}{" "}
+              for the cost of{" "}
+              {(lineup.total_projected_points - lineup.alternate_lineup.total_projected_points).toFixed(1)}{" "}
               projected points.
             </p>
           )}
-          <h2>Starters</h2>
-          <ul>
-            {active.starters.map((p) => (
-              <PlayerRow key={p.player_id} player={p} nameById={nameById} />
-            ))}
-          </ul>
-          <h2>Bench</h2>
-          <ul>
-            {active.bench.map((p) => (
-              <PlayerRow key={p.player_id} player={p} nameById={nameById} />
-            ))}
-          </ul>
+
+          <Card>
+            <h2 className="mb-2 text-sm font-semibold text-muted-foreground">Starters</h2>
+            <PlayerList players={active.starters} nameById={nameById} />
+          </Card>
+
+          <Card>
+            <h2 className="mb-2 text-sm font-semibold text-muted-foreground">Bench</h2>
+            <PlayerList players={active.bench} nameById={nameById} />
+          </Card>
+
           {lineup.unresolved_players.some((p) => p.reason === "bye") && (
-            <p>
+            <p className="text-sm text-muted-foreground">
               On bye:{" "}
               {lineup.unresolved_players
                 .filter((p) => p.reason === "bye")
@@ -136,7 +142,7 @@ export default function Lineup() {
             </p>
           )}
           {lineup.unresolved_players.some((p) => p.reason === "no_projection") && (
-            <p className="error">
+            <p className="text-sm text-destructive">
               No projection available this week (likely on bye or unmodeled):{" "}
               {lineup.unresolved_players
                 .filter((p) => p.reason === "no_projection")
@@ -144,7 +150,7 @@ export default function Lineup() {
                 .join(", ")}
             </p>
           )}
-        </>
+        </div>
       )}
     </div>
   );

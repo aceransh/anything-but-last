@@ -1,5 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
+import Card from "@/components/Card";
+import { Button } from "@/components/ui/button";
 import { apiFetch } from "../lib/api";
 
 export default function ConnectLeague() {
@@ -26,22 +28,25 @@ export default function ConnectLeague() {
   }
 
   return (
-    <div className="page">
-      <h1>Connect a Sleeper League</h1>
-      <form onSubmit={handleSubmit}>
-        <label>
-          Sleeper League ID
-          <input
-            value={leagueId}
-            onChange={(e) => setLeagueId(e.target.value)}
-            required
-          />
-        </label>
-        {error && <p className="error">{error}</p>}
-        <button type="submit" disabled={submitting}>
-          Connect
-        </button>
-      </form>
+    <div className="flex min-h-screen items-center justify-center px-4">
+      <Card className="w-full max-w-sm">
+        <h1 className="mb-6 text-xl font-bold text-foreground">Connect a Sleeper League</h1>
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          <label className="flex flex-col gap-1 text-sm">
+            Sleeper League ID
+            <input
+              value={leagueId}
+              onChange={(e) => setLeagueId(e.target.value)}
+              required
+              className="rounded-lg border border-input bg-transparent px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+            />
+          </label>
+          {error && <p className="text-sm text-destructive">{error}</p>}
+          <Button type="submit" disabled={submitting} className="w-full">
+            Connect
+          </Button>
+        </form>
+      </Card>
     </div>
   );
 }

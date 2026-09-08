@@ -1,5 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
+import Card from "@/components/Card";
+import { Button } from "@/components/ui/button";
 import { supabase } from "../lib/supabaseClient";
 
 export default function Login() {
@@ -40,42 +42,46 @@ export default function Login() {
   }
 
   return (
-    <div className="page">
-      <h1>Fantasy Copilot</h1>
-      <form onSubmit={handleSubmit}>
-        <label>
-          Email
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-          />
-        </label>
-        <label>
-          Password
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            minLength={6}
-            required
-          />
-        </label>
-        {error && <p className="error">{error}</p>}
-        <button type="submit" disabled={submitting}>
-          {mode === "sign-in" ? "Sign in" : "Sign up"}
+    <div className="flex min-h-screen items-center justify-center px-4">
+      <Card className="w-full max-w-sm">
+        <h1 className="mb-6 text-xl font-bold text-primary">Fantasy Copilot</h1>
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          <label className="flex flex-col gap-1 text-sm">
+            Email
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+              className="rounded-lg border border-input bg-transparent px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            Password
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              minLength={6}
+              required
+              className="rounded-lg border border-input bg-transparent px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+            />
+          </label>
+          {error && <p className="text-sm text-destructive">{error}</p>}
+          <Button type="submit" disabled={submitting} className="w-full">
+            {mode === "sign-in" ? "Sign in" : "Sign up"}
+          </Button>
+        </form>
+        <button
+          type="button"
+          className="mt-4 text-sm text-primary underline-offset-4 hover:underline"
+          onClick={() => setMode(mode === "sign-in" ? "sign-up" : "sign-in")}
+        >
+          {mode === "sign-in"
+            ? "Need an account? Sign up"
+            : "Already have an account? Sign in"}
         </button>
-      </form>
-      <button
-        type="button"
-        className="link-button"
-        onClick={() => setMode(mode === "sign-in" ? "sign-up" : "sign-in")}
-      >
-        {mode === "sign-in"
-          ? "Need an account? Sign up"
-          : "Already have an account? Sign in"}
-      </button>
+      </Card>
     </div>
   );
 }
