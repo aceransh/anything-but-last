@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     supabase_service_role_key: str
     allowed_origins: str = "http://localhost:5173"
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     @property
     def allowed_origins_list(self) -> list[str]:
