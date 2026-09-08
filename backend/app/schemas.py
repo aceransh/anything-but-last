@@ -1,4 +1,4 @@
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 
 class LeagueCreate(BaseModel):
@@ -62,3 +62,70 @@ class LineupResponse(BaseModel):
     total_projected_points: float
     unresolved_players: list[UnresolvedPlayer] = []
     alternate_lineup: AlternateLineup | None = None
+
+
+class TradeRosterPlayer(BaseModel):
+    player_id: str
+    position: str
+    projected_points: float
+    name: str | None = None
+    team: str | None = None
+    injury_status: str | None = None
+
+
+class TradeMove(BaseModel):
+    player_id: str
+    from_roster_id: int
+    to_roster_id: int
+
+
+class TradeEvaluateRequest(BaseModel):
+    roster_ids: list[int]
+    moves: list[TradeMove]
+
+    @model_validator(mode="after")
+    def valid(self) -> "TradeEvaluateRequest":
+        if len(self.roster_ids) < 2:
+            raise ValueError("A trade needs at least two teams")
+        if len(set(self.roster_ids)) != len(self.roster_ids):
+            raise ValueError("Duplicate roster in trade")
+        if not self.moves:
+            raise ValueError("A trade needs at least one player movement")
+        for move in self.moves:
+            if move.from_roster_id == move.to_roster_id:
+                raise ValueError("A player can't move to the same roster")
+            if move.from_roster_id not in self.roster_ids or move.to_roster_id not in self.roster_ids:
+                raise ValueError("Move references a roster not in this trade")
+        return self
+
+
+class TradePlayer(BaseModel):
+    player_id: str
+    position: str
+    projected_points: float
+    name: str | None = None
+    team: str | None = None
+    injury_status: str | None = None
+
+
+class LineupImpactSide(BaseModel):
+    before_total_projected_points: float
+    after_total_projected_points: float
+    change: float
+
+
+class TeamTradeResult(BaseModel):
+    roster_id: int
+    giving_players: list[TradePlayer]
+    receiving_players: list[TradePlayer]
+    giving_total: float
+    receiving_total: float
+    differential: float  # receiving_total - giving_total for this team
+    verdict: str
+    lineup_impact: LineupImpactSide
+
+
+class TradeEvaluateResponse(BaseModel):
+    start_week: int
+    end_week: int
+    teams: list[TeamTradeResult]
