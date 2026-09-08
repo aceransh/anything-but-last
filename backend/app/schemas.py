@@ -120,7 +120,7 @@ class TeamTradeResult(BaseModel):
     receiving_players: list[TradePlayer]
     giving_total: float
     receiving_total: float
-    differential: float  # receiving_total - giving_total for this team
+    differential: float  # lineup_impact.change -- real optimal-lineup swing, not raw point totals
     verdict: str
     lineup_impact: LineupImpactSide
 

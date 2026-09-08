@@ -130,21 +130,35 @@ def evaluate_trade(
     with ThreadPoolExecutor(max_workers=6) as executor:
         weekly_projections = list(executor.map(lambda w: _fetch_week_projections(season, w), weeks))
 
+    player_to_roster: dict[str, int] = {
+        player_id: roster_id for roster_id, ids in roster_player_ids.items() for player_id in ids
+    }
+
     ros_points: dict[str, float] = {}
     info_by_id: dict[str, dict] = {}
-    relevant_ids: set[str] = set().union(*roster_player_ids.values())
-    for projections in weekly_projections:
+    # Per-week rosters (not ROS-summed) -- this is what the verdict is
+    # actually computed from, see trade_math.evaluate_trade's docstring
+    # for why a season-total sum-then-optimize misses real value (byes,
+    # streaky/complementary players with tied season totals).
+    weekly_rosters: dict[int, dict[int, list[dict]]] = {}
+    for week, projections in zip(weeks, weekly_projections):
+        week_rosters: dict[int, list[dict]] = {roster_id: [] for roster_id in roster_player_ids}
         for row in projections:
             player_id = row.get("player_id")
-            if player_id not in relevant_ids:
+            roster_id = player_to_roster.get(player_id)
+            if roster_id is None:
                 continue
+            player = _row_to_player(row)
+            if player["position"] is None:
+                continue
+            week_rosters[roster_id].append(player)
+
             points = row.get("stats", {}).get("pts_ppr")
             if points is not None:
                 ros_points[player_id] = ros_points.get(player_id, 0.0) + points
             if player_id not in info_by_id:
-                player = _row_to_player(row)
-                if player["position"] is not None:
-                    info_by_id[player_id] = player
+                info_by_id[player_id] = player
+        weekly_rosters[week] = week_rosters
 
     def _build_pool(player_ids: set[str]) -> list[dict]:
         pool = []
@@ -170,6 +184,7 @@ def evaluate_trade(
     try:
         result = trade_math.evaluate_trade(
             rosters,
+            weekly_rosters,
             [move.model_dump() for move in payload.moves],
             slot_requirements,
         )
