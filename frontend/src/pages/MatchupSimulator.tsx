@@ -3,8 +3,22 @@ import { useParams } from "react-router-dom";
 import Avatar from "@/components/Avatar";
 import Card from "@/components/Card";
 import PlayerRow from "@/components/PlayerRow";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { apiFetch } from "../lib/api";
+
+type MatchupSource = "sleeper" | "draftsharks";
+
+const SOURCE_LABELS: Record<MatchupSource, string> = {
+  sleeper: "Sleeper",
+  draftsharks: "DraftSharks",
+};
 
 interface League {
   id: string;
@@ -68,7 +82,9 @@ export default function MatchupSimulator() {
   const { leagueId } = useParams<{ leagueId: string }>();
   const [ownRosterId, setOwnRosterId] = useState<number | null | undefined>(undefined);
   const [rosters, setRosters] = useState<RosterOption[] | null>(null);
+  const [source, setSource] = useState<MatchupSource>("sleeper");
   const [matchup, setMatchup] = useState<MatchupResponse | null>(null);
+  const [loadingMatchup, setLoadingMatchup] = useState(false);
   const [odds, setOdds] = useState<PlayoffOddsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [oddsError, setOddsError] = useState<string | null>(null);
@@ -91,11 +107,14 @@ export default function MatchupSimulator() {
 
   useEffect(() => {
     if (ownRosterId == null) return;
-    apiFetch(`/leagues/${leagueId}/matchup`)
+    setError(null);
+    setLoadingMatchup(true);
+    apiFetch(`/leagues/${leagueId}/matchup?source=${source}`)
       .then((res) => res.json())
       .then(setMatchup)
-      .catch((err) => setError(err instanceof Error ? err.message : "Failed to load this week's matchup"));
-  }, [leagueId, ownRosterId]);
+      .catch((err) => setError(err instanceof Error ? err.message : "Failed to load this week's matchup"))
+      .finally(() => setLoadingMatchup(false));
+  }, [leagueId, ownRosterId, source]);
 
   useEffect(() => {
     if (ownRosterId == null) return;
@@ -132,9 +151,20 @@ export default function MatchupSimulator() {
 
       {ownRosterId != null && (
         <section>
-          <h2 className="mb-3 text-sm font-semibold text-muted-foreground">This Week</h2>
-          {!matchup && !error && <p className="text-sm text-muted-foreground">Simulating...</p>}
-          {matchup && (
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-muted-foreground">This Week</h2>
+            <Select value={source} onValueChange={(value) => setSource(value as MatchupSource)}>
+              <SelectTrigger size="sm" className="w-40 text-xs">
+                <SelectValue>{SOURCE_LABELS[source]}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="sleeper">Sleeper</SelectItem>
+                <SelectItem value="draftsharks">DraftSharks</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          {loadingMatchup && <p className="text-sm text-muted-foreground">Simulating...</p>}
+          {!loadingMatchup && matchup && (
             <Card className="p-4">
               <div className="mb-4 flex items-center justify-between gap-4">
                 <div className="flex flex-1 items-center gap-2">

@@ -25,6 +25,11 @@ WEEKLY_VOLATILITY_PCT = 0.12
 WR_VOLATILITY_DISCOUNT = 0.03
 MIN_VOLATILITY_PCT = 0.02
 
+# Same constant already documented in this app's Hybrid-engine writeup
+# (the PDF's more precise 85th-percentile z-score) -- duplicated here, not
+# imported, same as every other constant in this module.
+CEILING_Z = 1.03643
+
 # Midpoints of the PDF's stated ranges (+0.35 to +0.55 for QB-pass-catcher
 # stacks, -0.15 to -0.30 for WR-WR target competition) -- a single point
 # estimate rather than a further-tunable range, since nothing here
@@ -40,9 +45,11 @@ SEASON_TRIALS = 1_000
 
 
 def weekly_std_dev(position: str, projected_points: float) -> float:
-    """A player projected at 0 (or less) gets 0 -- a fixed zero score, not
-    a distribution, since ln(0) is undefined and there's nothing to model
-    a spread around (byes, truly unprojected players)."""
+    """Synthetic proxy, used when a player carries no real floor/ceiling
+    (see player_std_dev). A player projected at 0 (or less) gets 0 -- a
+    fixed zero score, not a distribution, since ln(0) is undefined and
+    there's nothing to model a spread around (byes, truly unprojected
+    players)."""
     if projected_points <= 0:
         return 0.0
     pct = WEEKLY_VOLATILITY_PCT
@@ -51,20 +58,38 @@ def weekly_std_dev(position: str, projected_points: float) -> float:
     return projected_points * pct
 
 
+def player_std_dev(player: dict) -> float:
+    """Real floor/ceiling (e.g. from DraftSharks' weekly rankings, see
+    draftsharks.py) replaces the synthetic proxy outright when present --
+    same "real data wins, not layered on top" precedent the draft engine
+    already set for its own DraftSharks variant (draft_math_ds.py).
+
+    Deliberately the FULL floor-ceiling spread, not the draft engine's
+    downside-only formula: that one feeds a risk *penalty* in RARC, where
+    penalizing upside is backwards. This variance term feeds an actual
+    outcome *simulation* -- the point is to reproduce the real spread of
+    what could happen, both tails, so the full range is the correct
+    signal here.
+    """
+    floor = player.get("floor_points")
+    ceiling = player.get("ceiling_points")
+    if floor is not None and ceiling is not None:
+        return (ceiling - floor) / (2 * CEILING_Z)
+    return weekly_std_dev(player["position"], player["projected_points"])
+
+
 def build_lognormal_params(players: list[dict]) -> tuple[np.ndarray, np.ndarray]:
-    """Per-player (mu, sigma) in log-space. sigma_i^2 = ln(1 + pct_i^2) --
-    Var(Y_i)/E[Y_i]^2 collapses to exactly pct_i^2 since std_dev is
-    defined as E[Y_i] * pct_i. Players with 0 projected_points get
-    mu=sigma=0 (handled as a fixed zero, not sampled -- see
-    simulate_scores)."""
+    """Per-player (mu, sigma) in log-space. sigma_i^2 = ln(1 +
+    (std_dev/E[Y_i])^2) -- Var(Y_i)/E[Y_i]^2 in the PDF's own formula.
+    Players with 0 projected_points get mu=sigma=0 (handled as a fixed
+    zero, not sampled -- see simulate_scores)."""
     mu = np.zeros(len(players))
     sigma = np.zeros(len(players))
     for i, p in enumerate(players):
         e_y = p["projected_points"]
         if e_y <= 0:
             continue
-        std_dev = weekly_std_dev(p["position"], e_y)
-        pct = std_dev / e_y
+        pct = player_std_dev(p) / e_y
         sigma_sq = np.log(1 + pct**2)
         sigma[i] = np.sqrt(sigma_sq)
         mu[i] = np.log(e_y) - sigma_sq / 2

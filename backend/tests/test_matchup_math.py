@@ -2,7 +2,9 @@ import numpy as np
 import pytest
 
 from app.matchup_math import (
+    CEILING_Z,
     build_correlation_matrix,
+    player_std_dev,
     simulate_matchup,
     simulate_scores,
     simulate_season,
@@ -21,6 +23,16 @@ def _rng():
 def test_weekly_std_dev_zero_projection_is_zero():
     assert weekly_std_dev("RB", 0.0) == 0.0
     assert weekly_std_dev("RB", -5.0) == 0.0
+
+
+def test_player_std_dev_uses_real_floor_ceiling_when_present():
+    player = {"position": "RB", "projected_points": 20.0, "floor_points": 10.0, "ceiling_points": 30.0}
+    assert player_std_dev(player) == pytest.approx((30.0 - 10.0) / (2 * CEILING_Z))
+
+
+def test_player_std_dev_falls_back_to_synthetic_proxy_without_real_data():
+    player = {"position": "RB", "projected_points": 20.0}
+    assert player_std_dev(player) == weekly_std_dev("RB", 20.0)
 
 
 def test_weekly_std_dev_wr_gets_discount():

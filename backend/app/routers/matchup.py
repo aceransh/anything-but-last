@@ -4,7 +4,7 @@ import numpy as np
 import requests
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from .. import matchup_math
+from .. import draftsharks, matchup_math
 from ..deps import UserContext, get_current_user
 from ..lineup_math import build_slot_requirements
 from ..schemas import MatchupSimulationResponse, PlayoffOddsResponse
@@ -57,10 +57,33 @@ def _row_to_player(row: dict) -> dict:
     }
 
 
+def _apply_draftsharks(players: list[dict], ds_rows: dict) -> list[dict]:
+    """Overrides projected_points/floor/ceiling for whichever players
+    match a DraftSharks row this week; a player with no match keeps their
+    Sleeper values untouched (never dropped -- see draftsharks.py)."""
+    merged = []
+    for p in players:
+        key = draftsharks.player_key(p.get("name") or "", p["position"], p.get("team"))
+        row = ds_rows.get(key)
+        if row is None:
+            merged.append(p)
+            continue
+        merged.append(
+            {
+                **p,
+                "projected_points": row["projected_points"],
+                "floor_points": row["floor_points"],
+                "ceiling_points": row["ceiling_points"],
+            }
+        )
+    return merged
+
+
 @router.get("/{league_id}/matchup", response_model=MatchupSimulationResponse)
 def get_matchup(
     league_id: str,
     week: int | None = Query(default=None, ge=1, le=18),
+    source: str = Query(default="sleeper", pattern="^(sleeper|draftsharks)$"),
     user: UserContext = Depends(get_current_user),
 ):
     league = get_owned_league(league_id, user.user_id)
@@ -98,8 +121,16 @@ def get_matchup(
     def _pool(roster_id: int) -> list[dict]:
         return [players_by_id[pid] for pid in roster_player_ids.get(roster_id, set()) if pid in players_by_id]
 
+    own_pool = _pool(own_roster_id)
+    opponent_pool = _pool(opponent_roster_id)
+
+    if source == "draftsharks":
+        ds_rows = draftsharks.fetch_weekly_rows(week)
+        own_pool = _apply_draftsharks(own_pool, ds_rows)
+        opponent_pool = _apply_draftsharks(opponent_pool, ds_rows)
+
     result = matchup_math.simulate_matchup(
-        _pool(own_roster_id), _pool(opponent_roster_id), slot_requirements, rng=np.random.default_rng()
+        own_pool, opponent_pool, slot_requirements, rng=np.random.default_rng()
     )
 
     return MatchupSimulationResponse(
