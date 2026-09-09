@@ -19,6 +19,13 @@ import {
 import { cn } from "@/lib/utils";
 import { apiFetch } from "../lib/api";
 
+type TradeSource = "sleeper" | "draftsharks";
+
+const SOURCE_LABELS: Record<TradeSource, string> = {
+  sleeper: "Sleeper",
+  draftsharks: "DraftSharks",
+};
+
 interface League {
   id: string;
   sleeper_roster_id: number | null;
@@ -51,6 +58,7 @@ export default function Trade() {
   const prefill = (location.state as { prefill?: TradePrefill } | null)?.prefill;
   const [ownRosterId, setOwnRosterId] = useState<number | null | undefined>(undefined);
   const [rosters, setRosters] = useState<RosterOption[] | null>(null);
+  const [source, setSource] = useState<TradeSource>("sleeper");
   const [step, setStep] = useState<"select-teams" | "assign-players">(
     prefill ? "assign-players" : "select-teams",
   );
@@ -82,13 +90,14 @@ export default function Trade() {
 
   // Load every roster's players up front, as soon as we know the league's
   // teams -- lets the user browse everyone's roster before picking who to
-  // trade with, same as Sleeper's own "Propose Trade" screen.
+  // trade with, same as Sleeper's own "Propose Trade" screen. Re-fetches
+  // all of them (resetting the cache) whenever the source changes.
   useEffect(() => {
     if (!rosters) return;
+    setRosterPlayers({});
     for (const r of rosters) {
       const rosterId = r.sleeper_roster_id;
-      if (rosterPlayers[rosterId]) continue;
-      apiFetch(`/leagues/${leagueId}/trade/roster-players/${rosterId}`)
+      apiFetch(`/leagues/${leagueId}/trade/roster-players/${rosterId}?source=${source}`)
         .then((res) => res.json())
         .then((players: RosterPlayer[]) =>
           setRosterPlayers((prev) => ({ ...prev, [rosterId]: players })),
@@ -97,8 +106,7 @@ export default function Trade() {
           setError(err instanceof Error ? err.message : "Failed to load a roster"),
         );
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rosters, leagueId]);
+  }, [rosters, leagueId, source]);
 
   const nameByRosterId = new Map(rosters?.map((r) => [r.sleeper_roster_id, r.owner_display_name]));
 
@@ -151,7 +159,7 @@ export default function Trade() {
     try {
       const res = await apiFetch(`/leagues/${leagueId}/trade-evaluate`, {
         method: "POST",
-        body: JSON.stringify({ roster_ids: participantIds, moves }),
+        body: JSON.stringify({ roster_ids: participantIds, moves, source }),
       });
       setResult(await res.json());
     } catch (err) {
@@ -183,7 +191,18 @@ export default function Trade() {
 
   return (
     <div className="mx-auto max-w-6xl">
-      <h1 className="mb-4 text-xl font-bold text-foreground">Trade Evaluator</h1>
+      <div className="mb-4 flex items-center justify-between">
+        <h1 className="text-xl font-bold text-foreground">Trade Evaluator</h1>
+        <Select value={source} onValueChange={(value) => setSource(value as TradeSource)}>
+          <SelectTrigger size="sm" className="w-40 text-xs">
+            <SelectValue>{SOURCE_LABELS[source]}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="sleeper">Sleeper</SelectItem>
+            <SelectItem value="draftsharks">DraftSharks</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
       {error && <p className="mb-4 text-sm text-destructive">{error}</p>}
       {ownRosterId === null && (
         <p className="text-sm text-destructive">
@@ -356,7 +375,11 @@ export default function Trade() {
             disabled={evaluating || Object.keys(destinations).length === 0}
             onClick={handleEvaluate}
           >
-            {evaluating ? "Evaluating..." : "Evaluate trade"}
+            {evaluating
+              ? source === "draftsharks"
+                ? "Fetching DraftSharks projections for the rest of the season -- this can take longer than Sleeper..."
+                : "Evaluating..."
+              : "Evaluate trade"}
           </Button>
         </div>
       )}

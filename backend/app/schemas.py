@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, field_validator, model_validator
 
 
@@ -90,6 +92,7 @@ class TradeMove(BaseModel):
 class TradeEvaluateRequest(BaseModel):
     roster_ids: list[int]
     moves: list[TradeMove]
+    source: Literal["sleeper", "draftsharks"] = "sleeper"
 
     @model_validator(mode="after")
     def valid(self) -> "TradeEvaluateRequest":

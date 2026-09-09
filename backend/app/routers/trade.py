@@ -1,9 +1,9 @@
 from concurrent.futures import ThreadPoolExecutor
 
 import requests
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
-from .. import trade_finder, trade_math
+from .. import draftsharks, trade_finder, trade_math
 from ..deps import UserContext, get_current_user
 from ..lineup_math import build_slot_requirements
 from ..schemas import (
@@ -78,6 +78,7 @@ def _row_to_player(row: dict) -> dict:
 def get_roster_players(
     league_id: str,
     roster_id: int,
+    source: str = Query(default="sleeper", pattern="^(sleeper|draftsharks)$"),
     user: UserContext = Depends(get_current_user),
 ):
     league = get_owned_league(league_id, user.user_id)
@@ -112,16 +113,31 @@ def get_roster_players(
                 "projected_points": 0.0,
             }
         )
+
+    if source == "draftsharks":
+        # Just this week's real DraftSharks value for the picker's
+        # at-a-glance display -- the ROS cost only gets paid at
+        # trade-evaluate/trade-finder time, not while browsing.
+        ds_rows = draftsharks.fetch_weekly_rows(state["week"])
+        players = draftsharks.apply_to_players(players, ds_rows)
+
     return players
 
 
-def _fetch_trade_data(sleeper_league_id: str, roster_ids: list[int]) -> dict:
+def _fetch_trade_data(sleeper_league_id: str, roster_ids: list[int], source: str = "sleeper") -> dict:
     """Fetches everything trade math needs for the given rosters: this
     week's state, slot requirements + playoff_start_week from league
     settings, and rest-of-season weekly projections filed per roster.
     Shared by trade-evaluate (a user-picked subset of rosters) and
     trade-finder (every roster in the league) so neither duplicates this
     fetch-and-shape logic. Raises 404 if a roster_id isn't in this league.
+
+    source="draftsharks" re-fetches DraftSharks' real weekly floor/ceiling
+    for EVERY remaining week (not a single season-total number) and merges
+    it into weekly_rosters -- the verdict is driven by re-optimizing each
+    remaining week separately (see trade_math.evaluate_trade's docstring),
+    so a flat season-total number would silently reintroduce the exact
+    "collapsing to one number" bug that function was fixed to avoid.
     """
     state = _sleeper_get(SLEEPER_STATE_URL)
     season = state["season"]
@@ -177,6 +193,28 @@ def _fetch_trade_data(sleeper_league_id: str, roster_ids: list[int]) -> dict:
                 info_by_id[player_id] = player
         weekly_rosters[week] = week_rosters
 
+    if source == "draftsharks":
+        with ThreadPoolExecutor(max_workers=6) as executor:
+            ds_rows_by_week = dict(zip(weeks, executor.map(draftsharks.fetch_weekly_rows, weeks)))
+
+        for week, week_rosters in weekly_rosters.items():
+            ds_rows = ds_rows_by_week[week]
+            for roster_id, pool in week_rosters.items():
+                week_rosters[roster_id] = draftsharks.apply_to_players(pool, ds_rows)
+
+        # Re-derive ROS totals from the now-adjusted weekly pools instead of
+        # the original Sleeper-only ros_points, so giving/receiving totals
+        # stay consistent with whatever source is actually driving the
+        # verdict -- identity (name/position/team) still comes from
+        # info_by_id/Sleeper unchanged, only the point values move.
+        ros_points = {}
+        for week_rosters in weekly_rosters.values():
+            for pool in week_rosters.values():
+                for player in pool:
+                    ros_points[player["player_id"]] = (
+                        ros_points.get(player["player_id"], 0.0) + player["projected_points"]
+                    )
+
     def _build_pool(player_ids: set[str]) -> list[dict]:
         pool = []
         for player_id in player_ids:
@@ -215,7 +253,7 @@ def evaluate_trade(
     user: UserContext = Depends(get_current_user),
 ):
     league = get_owned_league(league_id, user.user_id)
-    data = _fetch_trade_data(league["sleeper_league_id"], payload.roster_ids)
+    data = _fetch_trade_data(league["sleeper_league_id"], payload.roster_ids, source=payload.source)
 
     try:
         result = trade_math.evaluate_trade(
@@ -239,6 +277,7 @@ def evaluate_trade(
 @router.get("/{league_id}/trade-finder", response_model=TradeFinderResponse)
 def find_trades(
     league_id: str,
+    source: str = Query(default="sleeper", pattern="^(sleeper|draftsharks)$"),
     user: UserContext = Depends(get_current_user),
 ):
     league = get_owned_league(league_id, user.user_id)
@@ -250,7 +289,7 @@ def find_trades(
     sleeper_rosters = _sleeper_get(SLEEPER_ROSTERS_URL.format(league_id=sleeper_league_id))
     all_roster_ids = [r["roster_id"] for r in sleeper_rosters]
 
-    data = _fetch_trade_data(sleeper_league_id, all_roster_ids)
+    data = _fetch_trade_data(sleeper_league_id, all_roster_ids, source=source)
 
     # Phase 1 (cheap, ROS-total based): build the manager graph and find
     # every elementary cycle through the caller's own roster, ranked by a

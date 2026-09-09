@@ -4,8 +4,22 @@ import Avatar from "@/components/Avatar";
 import Card from "@/components/Card";
 import TradeResultCard, { type TeamTradeResult } from "@/components/TradeResultCard";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { apiFetch } from "@/lib/api";
 import type { TradePrefill } from "./Trade";
+
+type TradeSource = "sleeper" | "draftsharks";
+
+const SOURCE_LABELS: Record<TradeSource, string> = {
+  sleeper: "Sleeper",
+  draftsharks: "DraftSharks",
+};
 
 interface League {
   id: string;
@@ -41,6 +55,7 @@ export default function TradeFinder() {
   const navigate = useNavigate();
   const [ownRosterId, setOwnRosterId] = useState<number | null | undefined>(undefined);
   const [rosters, setRosters] = useState<RosterOption[] | null>(null);
+  const [source, setSource] = useState<TradeSource>("sleeper");
   const [result, setResult] = useState<TradeFinderResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -70,7 +85,7 @@ export default function TradeFinder() {
     setError(null);
     setLoading(true);
     try {
-      const res = await apiFetch(`/leagues/${leagueId}/trade-finder`);
+      const res = await apiFetch(`/leagues/${leagueId}/trade-finder?source=${source}`);
       setResult(await res.json());
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to find trades");
@@ -91,7 +106,18 @@ export default function TradeFinder() {
 
   return (
     <div className="mx-auto max-w-6xl">
-      <h1 className="mb-1 text-xl font-bold text-foreground">Trade Finder</h1>
+      <div className="mb-1 flex items-center justify-between">
+        <h1 className="text-xl font-bold text-foreground">Trade Finder</h1>
+        <Select value={source} onValueChange={(value) => setSource(value as TradeSource)}>
+          <SelectTrigger size="sm" className="w-40 text-xs">
+            <SelectValue>{SOURCE_LABELS[source]}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="sleeper">Sleeper</SelectItem>
+            <SelectItem value="draftsharks">DraftSharks</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
       <p className="mb-4 text-sm text-muted-foreground">
         Scans every roster in your league for 2-to-4-team trades (including 2-for-1 packages)
         that leave every participant's real starting lineup better off.
@@ -105,7 +131,11 @@ export default function TradeFinder() {
 
       {ownRosterId != null && (
         <Button disabled={loading} onClick={handleFind}>
-          {loading ? "Scanning your league for trades..." : "Find trades for me"}
+          {loading
+            ? source === "draftsharks"
+              ? "Fetching DraftSharks projections for the rest of the season -- this can take longer than Sleeper..."
+              : "Scanning your league for trades..."
+            : "Find trades for me"}
         </Button>
       )}
 
