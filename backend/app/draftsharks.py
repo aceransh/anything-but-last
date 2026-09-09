@@ -148,3 +148,28 @@ def fetch_weekly_rows(week: int) -> dict[str | tuple[str, str], dict]:
                 continue
             rows_by_key[_match_key(row)] = row
     return rows_by_key
+
+
+def apply_to_players(players: list[dict], ds_rows: dict) -> list[dict]:
+    """Overrides projected_points/floor/ceiling for whichever of the given
+    (Sleeper-shaped) players match a DraftSharks row this week; a player
+    with no match keeps their Sleeper values untouched (never dropped).
+    Shared by routers/matchup.py and routers/lineup.py so this merge logic
+    exists in exactly one place.
+    """
+    merged = []
+    for p in players:
+        key = player_key(p.get("name") or "", p["position"], p.get("team"))
+        row = ds_rows.get(key)
+        if row is None:
+            merged.append(p)
+            continue
+        merged.append(
+            {
+                **p,
+                "projected_points": row["projected_points"],
+                "floor_points": row["floor_points"],
+                "ceiling_points": row["ceiling_points"],
+            }
+        )
+    return merged

@@ -1,7 +1,12 @@
+import pytest
+
 from app.lineup_math import (
     build_alternate_lineup,
+    build_context_aware_lineup,
     build_slot_requirements,
     classify_unresolved_players,
+    compute_context_weight,
+    context_aware_score,
     detect_same_team_stacks,
     is_injury_warning,
     optimize_lineup,
@@ -160,6 +165,73 @@ def test_classify_unresolved_players_def_not_on_bye_falls_back():
     # but should degrade to "no_projection" rather than a wrong "bye".
     result = classify_unresolved_players(["KC"], "2026", 1)
     assert result == [{"player_id": "KC", "reason": "no_projection"}]
+
+
+def _player_fc(player_id, position, projected_points, floor_points, ceiling_points):
+    return {
+        "player_id": player_id,
+        "position": position,
+        "projected_points": projected_points,
+        "floor_points": floor_points,
+        "ceiling_points": ceiling_points,
+    }
+
+
+def test_compute_context_weight_at_named_fixed_points():
+    assert compute_context_weight(0.40) == 1.0
+    assert compute_context_weight(0.65) == 0.0
+
+
+def test_compute_context_weight_clamps_outside_the_band():
+    assert compute_context_weight(0.10) == 1.0
+    assert compute_context_weight(0.90) == 0.0
+
+
+def test_compute_context_weight_interpolates_linearly_in_the_band():
+    assert compute_context_weight(0.525) == pytest.approx(0.5)
+
+
+def test_context_aware_score_favors_ceiling_when_underdog():
+    # Same mean, but rb_boom has more upside -- at w=1 (full underdog) it
+    # should score higher than the steadier rb_safe.
+    rb_boom = _player_fc("boom", "RB", 15.0, floor_points=5.0, ceiling_points=35.0)
+    rb_safe = _player_fc("safe", "RB", 15.0, floor_points=13.0, ceiling_points=17.0)
+    assert context_aware_score(rb_boom, 1.0) > context_aware_score(rb_safe, 1.0)
+
+
+def test_context_aware_score_favors_floor_when_favorite():
+    rb_boom = _player_fc("boom", "RB", 15.0, floor_points=5.0, ceiling_points=35.0)
+    rb_safe = _player_fc("safe", "RB", 15.0, floor_points=13.0, ceiling_points=17.0)
+    assert context_aware_score(rb_safe, 0.0) > context_aware_score(rb_boom, 0.0)
+
+
+def test_context_aware_score_no_real_data_is_flat_double():
+    player = _player("rb1", "RB", 15.0)
+    assert context_aware_score(player, 0.5) == 30.0
+    assert context_aware_score(player, 1.0) == 30.0
+    assert context_aware_score(player, 0.0) == 30.0
+
+
+def test_build_context_aware_lineup_picks_high_ceiling_when_underdog():
+    players = [
+        _player_fc("boom", "RB", 15.0, floor_points=5.0, ceiling_points=35.0),
+        _player_fc("safe", "RB", 15.0, floor_points=13.0, ceiling_points=17.0),
+    ]
+    result = build_context_aware_lineup(players, {"RB": 1}, w_context=1.0)
+    assert [p["player_id"] for p in result["starters"]] == ["boom"]
+    assert result["w_context"] == 1.0
+    # total_projected_points reports real E[Y] of the chosen starter, not
+    # the adjusted context score.
+    assert result["total_projected_points"] == 15.0
+
+
+def test_build_context_aware_lineup_picks_high_floor_when_favorite():
+    players = [
+        _player_fc("boom", "RB", 15.0, floor_points=5.0, ceiling_points=35.0),
+        _player_fc("safe", "RB", 15.0, floor_points=13.0, ceiling_points=17.0),
+    ]
+    result = build_context_aware_lineup(players, {"RB": 1}, w_context=0.0)
+    assert [p["player_id"] for p in result["starters"]] == ["safe"]
 
 
 def test_classify_unresolved_players_skill_position_id_is_no_projection():

@@ -33,12 +33,27 @@ def build_slot_requirements(roster_positions: list[str]) -> dict[str, int]:
     return requirements
 
 
-def optimize_lineup(players: list[dict], slot_requirements: dict[str, int]) -> dict:
+def _default_score(player: dict) -> float:
+    return player["projected_points"]
+
+
+def optimize_lineup(players: list[dict], slot_requirements: dict[str, int], score_fn=None) -> dict:
     """`players` is a list of {player_id, position, projected_points, ...}
     (any extra keys, e.g. name/team/injury_status, are carried through
     unchanged onto the returned starter/bench entries). Returns
     {starters: [...], bench: [...], total_projected_points}.
+
+    `score_fn(player) -> float` ranks candidates for each slot -- defaults
+    to raw `projected_points` (today's exact behavior). `total_projected_points`
+    always sums real `projected_points` regardless of what score_fn ranked
+    by, so a caller using an adjusted score (see build_context_aware_lineup)
+    still gets an honest expected-points total, not the adjusted score. The
+    same greedy top-N-per-slot-then-FLEX assignment is provably optimal for
+    this exact slot structure for ANY linear per-player score, not just raw
+    points (see CLAUDE.md's Research Documents note on the PDF's
+    context-aware weighting) -- so this is a generalization, not a fork.
     """
+    score_fn = score_fn or _default_score
     used: set[str] = set()
     starters: list[dict] = []
 
@@ -48,7 +63,7 @@ def optimize_lineup(players: list[dict], slot_requirements: dict[str, int]) -> d
             continue
         ranked = sorted(
             (p for p in players if p["position"] == position and p["player_id"] not in used),
-            key=lambda p: -p["projected_points"],
+            key=lambda p: -score_fn(p),
         )
         for p in ranked[:count]:
             starters.append({**p, "slot": position})
@@ -58,7 +73,7 @@ def optimize_lineup(players: list[dict], slot_requirements: dict[str, int]) -> d
     if flex_count:
         flex_ranked = sorted(
             (p for p in players if p["position"] in FLEX_ELIGIBLE and p["player_id"] not in used),
-            key=lambda p: -p["projected_points"],
+            key=lambda p: -score_fn(p),
         )
         for p in flex_ranked[:flex_count]:
             starters.append({**p, "slot": "FLEX"})
@@ -168,4 +183,58 @@ def build_alternate_lineup(
     starter_ids = {p["player_id"] for p in result["starters"]}
     result["bench"] = [p for p in players if p["player_id"] not in starter_ids]
     result["swapped_out"] = sorted(excluded)
+    return result
+
+
+# Research PDF's own two named fixed points ("Underdog Configuration":
+# P(W) < 0.40 -> w_context -> 1.0; "Favorite Configuration": P(W) > 0.65
+# -> w_context -> 0.0) -- the PDF never specifies the band between them, so
+# compute_context_weight linearly ramps between these two named points, the
+# natural non-arbitrary way to fill that gap.
+UNDERDOG_WIN_PROB = 0.40
+FAVORITE_WIN_PROB = 0.65
+
+
+def compute_context_weight(win_prob: float) -> float:
+    if win_prob <= UNDERDOG_WIN_PROB:
+        return 1.0
+    if win_prob >= FAVORITE_WIN_PROB:
+        return 0.0
+    return (FAVORITE_WIN_PROB - win_prob) / (FAVORITE_WIN_PROB - UNDERDOG_WIN_PROB)
+
+
+def context_aware_score(player: dict, w_context: float) -> float:
+    """E[Y_i] + w_context*Ceiling_i + (1-w_context)*Floor_i -- the research
+    PDF's own §"Context-Aware Dynamic Lineup Stacking and Floor/Ceiling
+    Optimization" formula, with one deliberate correction: the PDF's
+    literal formula SUBTRACTS the floor term (`- (1-w_context)*Floor_i`),
+    which at w_context=0 (its own "Favorite Configuration") rewards a
+    SMALLER floor -- backwards from its own stated intent ("select
+    high-floor starters to protect the lead"). This uses addition instead,
+    so a favorite's score is E[Y_i]+Floor_i (rewards good mean AND good
+    floor, matching the prose) and an underdog's is E[Y_i]+Ceiling_i
+    (rewards upside) -- same category of PDF-prose-vs-formula fix as the
+    Hybrid engine's Buy-Low sign correction (see CLAUDE.md).
+
+    A player with no real floor_points/ceiling_points (no DraftSharks
+    match) has both default to their own projected_points -- the formula
+    then collapses to a flat 2x their projected_points, a constant
+    multiplier applied uniformly to every no-data player, so their
+    relative ranking among each other is untouched.
+    """
+    e_y = player["projected_points"]
+    floor = player.get("floor_points")
+    ceiling = player.get("ceiling_points")
+    if floor is None or ceiling is None:
+        floor = ceiling = e_y
+    return e_y + w_context * ceiling + (1 - w_context) * floor
+
+
+def build_context_aware_lineup(players: list[dict], slot_requirements: dict[str, int], w_context: float) -> dict:
+    """Same greedy optimizer as optimize_lineup, ranked by context_aware_score
+    instead of raw projected_points -- see optimize_lineup's docstring for
+    why the same algorithm is provably optimal for any linear per-player
+    score, not just points."""
+    result = optimize_lineup(players, slot_requirements, score_fn=lambda p: context_aware_score(p, w_context))
+    result["w_context"] = w_context
     return result

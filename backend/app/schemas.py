@@ -55,6 +55,13 @@ class UnresolvedPlayer(BaseModel):
     reason: str  # "bye" (confirmed, DEF only) or "no_projection" (likely bye or unmodeled)
 
 
+class ContextLineup(BaseModel):
+    starters: list[LineupPlayer]
+    bench: list[LineupPlayer]
+    total_projected_points: float
+    w_context: float  # 1.0 = full underdog/ceiling-favoring, 0.0 = full favorite/floor-favoring
+
+
 class LineupResponse(BaseModel):
     week: int
     starters: list[LineupPlayer]
@@ -62,6 +69,7 @@ class LineupResponse(BaseModel):
     total_projected_points: float
     unresolved_players: list[UnresolvedPlayer] = []
     alternate_lineup: AlternateLineup | None = None
+    context_lineup: ContextLineup | None = None
 
 
 class TradeRosterPlayer(BaseModel):

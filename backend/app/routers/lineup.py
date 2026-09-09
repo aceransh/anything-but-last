@@ -1,16 +1,19 @@
 import requests
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from .. import draftsharks
 from ..deps import UserContext, get_current_user
 from ..lineup_math import (
     build_alternate_lineup,
+    build_context_aware_lineup,
     build_slot_requirements,
     classify_unresolved_players,
+    compute_context_weight,
     detect_same_team_stacks,
     is_injury_warning,
     optimize_lineup,
 )
-from ..schemas import AlternateLineup, LineupResponse
+from ..schemas import AlternateLineup, ContextLineup, LineupResponse
 from .leagues import get_owned_league
 
 router = APIRouter()
@@ -40,6 +43,8 @@ def _sleeper_get(url: str, **kwargs) -> dict | list:
 def get_lineup(
     league_id: str,
     week: int | None = Query(default=None, ge=1, le=18),
+    source: str = Query(default="sleeper", pattern="^(sleeper|draftsharks)$"),
+    context_win_prob: float | None = Query(default=None, ge=0.0, le=1.0),
     user: UserContext = Depends(get_current_user),
 ):
     league = get_owned_league(league_id, user.user_id)
@@ -97,6 +102,10 @@ def get_lineup(
         sorted(roster_player_ids - resolved_ids), season, week
     )
 
+    if source == "draftsharks":
+        ds_rows = draftsharks.fetch_weekly_rows(week)
+        players = draftsharks.apply_to_players(players, ds_rows)
+
     result = optimize_lineup(players, slot_requirements)
     stacks = detect_same_team_stacks(result["starters"])
 
@@ -114,6 +123,15 @@ def get_lineup(
     alternate = build_alternate_lineup(players, slot_requirements, stacks)
     alternate_lineup = AlternateLineup(**alternate) if alternate else None
 
+    # Only meaningful with real floor/ceiling data -- on Sleeper's flat
+    # synthetic-variance proxy every candidate's ranking is unchanged
+    # regardless of w_context, so this would silently be a no-op (see
+    # CLAUDE.md's writeup on this feature).
+    context_lineup = None
+    if context_win_prob is not None and source == "draftsharks":
+        w_context = compute_context_weight(context_win_prob)
+        context_lineup = ContextLineup(**build_context_aware_lineup(players, slot_requirements, w_context))
+
     return LineupResponse(
         week=week,
         starters=result["starters"],
@@ -121,4 +139,5 @@ def get_lineup(
         total_projected_points=result["total_projected_points"],
         unresolved_players=unresolved_players,
         alternate_lineup=alternate_lineup,
+        context_lineup=context_lineup,
     )

@@ -57,28 +57,6 @@ def _row_to_player(row: dict) -> dict:
     }
 
 
-def _apply_draftsharks(players: list[dict], ds_rows: dict) -> list[dict]:
-    """Overrides projected_points/floor/ceiling for whichever players
-    match a DraftSharks row this week; a player with no match keeps their
-    Sleeper values untouched (never dropped -- see draftsharks.py)."""
-    merged = []
-    for p in players:
-        key = draftsharks.player_key(p.get("name") or "", p["position"], p.get("team"))
-        row = ds_rows.get(key)
-        if row is None:
-            merged.append(p)
-            continue
-        merged.append(
-            {
-                **p,
-                "projected_points": row["projected_points"],
-                "floor_points": row["floor_points"],
-                "ceiling_points": row["ceiling_points"],
-            }
-        )
-    return merged
-
-
 @router.get("/{league_id}/matchup", response_model=MatchupSimulationResponse)
 def get_matchup(
     league_id: str,
@@ -126,8 +104,8 @@ def get_matchup(
 
     if source == "draftsharks":
         ds_rows = draftsharks.fetch_weekly_rows(week)
-        own_pool = _apply_draftsharks(own_pool, ds_rows)
-        opponent_pool = _apply_draftsharks(opponent_pool, ds_rows)
+        own_pool = draftsharks.apply_to_players(own_pool, ds_rows)
+        opponent_pool = draftsharks.apply_to_players(opponent_pool, ds_rows)
 
     result = matchup_math.simulate_matchup(
         own_pool, opponent_pool, slot_requirements, rng=np.random.default_rng()
