@@ -4,9 +4,9 @@ import LeagueLayout from "./components/LeagueLayout";
 import { useAuth } from "./lib/AuthContext";
 import ConnectLeague from "./pages/ConnectLeague";
 import Dashboard from "./pages/Dashboard";
-import Lineup from "./pages/Lineup";
 import Login from "./pages/Login";
-import MatchupSimulator from "./pages/MatchupSimulator";
+import Matchup from "./pages/Matchup";
+import PlayoffOdds from "./pages/PlayoffOdds";
 import SelectRoster from "./pages/SelectRoster";
 import Trade from "./pages/Trade";
 import TradeFinder from "./pages/TradeFinder";
@@ -55,10 +55,10 @@ export default function AppRoutes() {
           </RequireAuth>
         }
       >
-        <Route path="lineup" element={<Lineup />} />
+        <Route path="matchup" element={<Matchup />} />
         <Route path="trade" element={<Trade />} />
         <Route path="trade-finder" element={<TradeFinder />} />
-        <Route path="matchup-simulator" element={<MatchupSimulator />} />
+        <Route path="playoff-odds" element={<PlayoffOdds />} />
         <Route path="waivers" element={<Waivers />} />
       </Route>
     </Routes>

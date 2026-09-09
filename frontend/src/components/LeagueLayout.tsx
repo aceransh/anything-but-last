@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { NavLink, Outlet, useParams } from "react-router-dom";
+import { Link, NavLink, Outlet, useParams } from "react-router-dom";
 import { apiFetch } from "@/lib/api";
 import { supabase } from "@/lib/supabaseClient";
 import Avatar from "./Avatar";
@@ -9,19 +9,26 @@ interface League {
   id: string;
   league_name: string;
   season: string;
+  sleeper_roster_id: number | null;
+}
+
+interface RosterOption {
+  sleeper_roster_id: number;
+  owner_display_name: string;
 }
 
 const TABS = [
-  { to: "lineup", label: "Lineup" },
+  { to: "matchup", label: "Matchup" },
   { to: "trade", label: "Trade Evaluator" },
   { to: "trade-finder", label: "Trade Finder" },
-  { to: "matchup-simulator", label: "Matchup Simulator" },
+  { to: "playoff-odds", label: "Playoff Odds" },
   { to: "waivers", label: "Waivers" },
 ];
 
 export default function LeagueLayout() {
   const { leagueId } = useParams<{ leagueId: string }>();
   const [leagues, setLeagues] = useState<League[] | null>(null);
+  const [rosters, setRosters] = useState<RosterOption[] | null>(null);
 
   useEffect(() => {
     apiFetch("/leagues")
@@ -29,6 +36,20 @@ export default function LeagueLayout() {
       .then(setLeagues)
       .catch(() => setLeagues([]));
   }, []);
+
+  const activeLeague = leagues?.find((l) => l.id === leagueId);
+
+  useEffect(() => {
+    if (!leagueId) return;
+    apiFetch(`/leagues/${leagueId}/rosters`)
+      .then((res) => res.json())
+      .then(setRosters)
+      .catch(() => setRosters(null));
+  }, [leagueId]);
+
+  const yourTeamName = rosters?.find(
+    (r) => r.sleeper_roster_id === activeLeague?.sleeper_roster_id,
+  )?.owner_display_name;
 
   return (
     <div className="flex min-h-screen">
@@ -44,7 +65,7 @@ export default function LeagueLayout() {
             {leagues?.map((league) => (
               <li key={league.id}>
                 <NavLink
-                  to={`/leagues/${league.id}/lineup`}
+                  to={`/leagues/${league.id}/matchup`}
                   className={cn(
                     "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm",
                     league.id === leagueId
@@ -71,23 +92,33 @@ export default function LeagueLayout() {
       </aside>
 
       <div className="flex-1">
-        <div className="flex gap-1 border-b border-border bg-card px-4">
-          {TABS.map((tab) => (
-            <NavLink
-              key={tab.to}
-              to={`/leagues/${leagueId}/${tab.to}`}
-              className={({ isActive }) =>
-                cn(
-                  "border-b-2 px-3 py-3 text-sm font-medium",
-                  isActive
-                    ? "border-primary text-primary"
-                    : "border-transparent text-muted-foreground hover:text-foreground",
-                )
-              }
-            >
-              {tab.label}
-            </NavLink>
-          ))}
+        <div className="flex items-center justify-between gap-4 border-b border-border bg-card px-4">
+          <div className="flex gap-1">
+            {TABS.map((tab) => (
+              <NavLink
+                key={tab.to}
+                to={`/leagues/${leagueId}/${tab.to}`}
+                className={({ isActive }) =>
+                  cn(
+                    "border-b-2 px-3 py-3 text-sm font-medium",
+                    isActive
+                      ? "border-primary text-primary"
+                      : "border-transparent text-muted-foreground hover:text-foreground",
+                  )
+                }
+              >
+                {tab.label}
+              </NavLink>
+            ))}
+          </div>
+          {leagueId && activeLeague?.sleeper_roster_id != null && (
+            <p className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
+              Your team: <span className="font-medium text-foreground">{yourTeamName ?? "..."}</span>{" "}
+              <Link to={`/leagues/${leagueId}/select-roster`} className="text-primary hover:underline">
+                Change
+              </Link>
+            </p>
+          )}
         </div>
         <main className="p-6">
           <Outlet />

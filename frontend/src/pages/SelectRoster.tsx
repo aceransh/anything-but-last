@@ -33,7 +33,7 @@ export default function SelectRoster() {
         method: "PATCH",
         body: JSON.stringify({ sleeper_roster_id: sleeperRosterId }),
       });
-      navigate(`/leagues/${leagueId}/lineup`);
+      navigate(`/leagues/${leagueId}/matchup`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to claim roster");
       setClaiming(false);

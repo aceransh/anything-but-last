@@ -150,21 +150,24 @@ def simulate_scores(players: list[dict], trials: int, rng: np.random.Generator) 
 
 
 def simulate_matchup(
-    team_a_starters: list[dict],
-    team_b_starters: list[dict],
-    slot_requirements: dict[str, int],
+    starters_a: list[dict],
+    starters_b: list[dict],
     trials: int = SINGLE_WEEK_TRIALS,
     rng: np.random.Generator | None = None,
 ) -> dict:
-    """Optimizes both teams' actual starting lineups (a matchup is about
-    who's starting, not the full roster), then simulates the combined
-    pool once so cross-team same-real-NFL-team correlation is captured
-    correctly, splitting back into each side's per-trial total.
+    """Takes each team's actual starting lineup as already resolved by the
+    caller -- for the real single-week matchup this is a manager's real,
+    already-set Sleeper lineup (lineup_math.resolve_real_starters), not a
+    recomputed optimum, since a matchup is about who's actually playing,
+    not who theoretically should be (see routers/matchup.py). Simulates
+    the combined pool once so cross-team same-real-NFL-team correlation is
+    captured correctly, splitting back into each side's per-trial total.
+
+    Unlike this function, simulate_season below still calls optimize_lineup
+    per remaining week -- a deliberate difference, not an inconsistency:
+    future unplayed weeks have no real "already-set" lineup to use yet.
     """
     rng = rng or np.random.default_rng()
-    starters_a = optimize_lineup(team_a_starters, slot_requirements)["starters"]
-    starters_b = optimize_lineup(team_b_starters, slot_requirements)["starters"]
-
     pool = starters_a + starters_b
     scores = simulate_scores(pool, trials, rng)
     scores_a = scores[:, : len(starters_a)].sum(axis=1)

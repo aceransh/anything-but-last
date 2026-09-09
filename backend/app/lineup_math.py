@@ -33,6 +33,49 @@ def build_slot_requirements(roster_positions: list[str]) -> dict[str, int]:
     return requirements
 
 
+def starting_slot_order(roster_positions: list[str]) -> list[str]:
+    """Same non-bench filter as build_slot_requirements, but preserves
+    order and repetition instead of tallying into counts -- e.g.
+    ["QB","RB","RB","WR","WR","TE","FLEX","K","DEF","BN",...] ->
+    ["QB","RB","RB","WR","WR","TE","FLEX","K","DEF"]. This is the order a
+    roster's real `starters` array (Sleeper's own already-set lineup) is
+    in -- confirmed live: starters[i] is whoever's actually in slot
+    starting_slot_order(...)[i], including which real player is sitting in
+    FLEX (see resolve_real_starters).
+    """
+    return [slot for slot in roster_positions if slot in FIXED_POSITIONS or slot == "FLEX"]
+
+
+def resolve_real_starters(
+    slot_order: list[str], sleeper_starter_ids: list[str], info_by_id: dict[str, dict]
+) -> list[dict]:
+    """Zips a roster's real, already-set Sleeper `starters` array onto its
+    slot order to recover each starter's actual slot label -- what a
+    manager has actually decided to start, not a recomputed optimum (see
+    "This Week" in routers/matchup.py, which uses this instead of
+    optimize_lineup). Sleeper uses "0" as an empty-slot placeholder (no one
+    set there yet) -- skipped, same as any other real gap in a roster. A
+    starter id missing from info_by_id (bye/no projection this week) still
+    gets the existing UNKNOWN-stub fallback rather than being silently
+    dropped, same "missing real data degrades gracefully" precedent used
+    everywhere else in this app.
+    """
+    starters = []
+    for slot, player_id in zip(slot_order, sleeper_starter_ids):
+        if not player_id or player_id == "0":
+            continue
+        player = info_by_id.get(player_id) or {
+            "player_id": player_id,
+            "position": "UNKNOWN",
+            "name": None,
+            "team": None,
+            "injury_status": None,
+            "projected_points": 0.0,
+        }
+        starters.append({**player, "slot": slot})
+    return starters
+
+
 def _default_score(player: dict) -> float:
     return player["projected_points"]
 

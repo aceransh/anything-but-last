@@ -83,7 +83,7 @@ def test_simulate_scores_zero_projection_player_never_contributes():
 def test_simulate_matchup_heavy_favorite_wins_most_trials():
     team_a = [_p("qb_a", "QB", 40.0, "AAA")]
     team_b = [_p("qb_b", "QB", 5.0, "BBB")]
-    result = simulate_matchup(team_a, team_b, slot_requirements={"QB": 1}, trials=5000, rng=_rng())
+    result = simulate_matchup(team_a, team_b, trials=5000, rng=_rng())
     assert result["win_prob_a"] > 0.95
     assert result["win_prob_a"] + result["win_prob_b"] == pytest.approx(1.0, abs=1e-6)
     assert result["score_a"]["mean"] > result["score_b"]["mean"]
@@ -92,7 +92,7 @@ def test_simulate_matchup_heavy_favorite_wins_most_trials():
 def test_simulate_matchup_evenly_matched_is_close_to_50_50():
     team_a = [_p("qb_a", "QB", 20.0, "AAA")]
     team_b = [_p("qb_b", "QB", 20.0, "BBB")]
-    result = simulate_matchup(team_a, team_b, slot_requirements={"QB": 1}, trials=5000, rng=_rng())
+    result = simulate_matchup(team_a, team_b, trials=5000, rng=_rng())
     assert 0.4 < result["win_prob_a"] < 0.6
 
 

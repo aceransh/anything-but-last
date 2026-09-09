@@ -48,7 +48,7 @@ export default function Dashboard() {
               to={
                 league.sleeper_roster_id === null
                   ? `/leagues/${league.id}/select-roster`
-                  : `/leagues/${league.id}/lineup`
+                  : `/leagues/${league.id}/matchup`
               }
             >
               <Card className="flex items-center gap-3 transition-colors hover:bg-secondary/60">

@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from .. import draftsharks, matchup_math
 from ..deps import UserContext, get_current_user
-from ..lineup_math import build_slot_requirements
+from ..lineup_math import build_slot_requirements, resolve_real_starters, starting_slot_order
 from ..schemas import MatchupSimulationResponse, PlayoffOddsResponse
 from .leagues import get_owned_league
 
@@ -76,10 +76,10 @@ def get_matchup(
         week = state["week"]
 
     league_settings = _sleeper_get(SLEEPER_LEAGUE_URL.format(league_id=sleeper_league_id))
-    slot_requirements = build_slot_requirements(league_settings.get("roster_positions", []))
+    slot_order = starting_slot_order(league_settings.get("roster_positions", []))
 
     sleeper_rosters = _sleeper_get(SLEEPER_ROSTERS_URL.format(league_id=sleeper_league_id))
-    roster_player_ids = {r["roster_id"]: set(r.get("players") or []) for r in sleeper_rosters}
+    roster_by_id = {r["roster_id"]: r for r in sleeper_rosters}
 
     matchups = _sleeper_get(SLEEPER_MATCHUPS_URL.format(league_id=sleeper_league_id, week=week))
     own_matchup = next((m for m in matchups if m["roster_id"] == own_roster_id), None)
@@ -94,22 +94,24 @@ def get_matchup(
     opponent_roster_id = opponent["roster_id"]
 
     projections = _fetch_week_projections(season, week)
-    players_by_id = {row.get("player_id"): _row_to_player(row) for row in projections}
+    info_by_id = {row.get("player_id"): _row_to_player(row) for row in projections}
 
-    def _pool(roster_id: int) -> list[dict]:
-        return [players_by_id[pid] for pid in roster_player_ids.get(roster_id, set()) if pid in players_by_id]
-
-    own_pool = _pool(own_roster_id)
-    opponent_pool = _pool(opponent_roster_id)
+    # Each manager's real, already-set Sleeper lineup -- not a recomputed
+    # optimum. A matchup is about who's actually playing, not who
+    # theoretically should be (see lineup_math.resolve_real_starters).
+    own_starters = resolve_real_starters(
+        slot_order, roster_by_id.get(own_roster_id, {}).get("starters") or [], info_by_id
+    )
+    opponent_starters = resolve_real_starters(
+        slot_order, roster_by_id.get(opponent_roster_id, {}).get("starters") or [], info_by_id
+    )
 
     if source == "draftsharks":
         ds_rows = draftsharks.fetch_weekly_rows(week)
-        own_pool = draftsharks.apply_to_players(own_pool, ds_rows)
-        opponent_pool = draftsharks.apply_to_players(opponent_pool, ds_rows)
+        own_starters = draftsharks.apply_to_players(own_starters, ds_rows)
+        opponent_starters = draftsharks.apply_to_players(opponent_starters, ds_rows)
 
-    result = matchup_math.simulate_matchup(
-        own_pool, opponent_pool, slot_requirements, rng=np.random.default_rng()
-    )
+    result = matchup_math.simulate_matchup(own_starters, opponent_starters, rng=np.random.default_rng())
 
     return MatchupSimulationResponse(
         week=week,

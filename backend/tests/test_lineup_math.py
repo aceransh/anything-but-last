@@ -10,6 +10,8 @@ from app.lineup_math import (
     detect_same_team_stacks,
     is_injury_warning,
     optimize_lineup,
+    resolve_real_starters,
+    starting_slot_order,
 )
 
 # Real roster_positions verified live against Sleeper for the league used
@@ -29,6 +31,60 @@ def test_build_slot_requirements_tallies_real_league():
 def test_build_slot_requirements_ignores_bench_and_unknown_slots():
     result = build_slot_requirements(["QB", "BN", "BN", "IR", "TAXI"])
     assert result == {"QB": 1}
+
+
+def test_starting_slot_order_preserves_order_and_repetition():
+    assert starting_slot_order(REAL_ROSTER_POSITIONS) == [
+        "QB", "RB", "RB", "WR", "WR", "TE", "FLEX", "K", "DEF",
+    ]
+
+
+def test_starting_slot_order_ignores_bench_and_unknown_slots():
+    assert starting_slot_order(["QB", "BN", "BN", "IR", "TAXI"]) == ["QB"]
+
+
+def test_resolve_real_starters_zips_ids_onto_slots_in_order():
+    # Real case verified live: FLEX (slot index 6) held a WR, not an RB.
+    slot_order = ["QB", "RB", "RB", "WR", "WR", "TE", "FLEX", "K", "DEF"]
+    sleeper_starter_ids = ["qb1", "rb1", "rb2", "wr1", "wr2", "te1", "wr3", "k1", "SEA"]
+    info_by_id = {
+        "qb1": {"player_id": "qb1", "position": "QB", "projected_points": 20.0},
+        "rb1": {"player_id": "rb1", "position": "RB", "projected_points": 15.0},
+        "rb2": {"player_id": "rb2", "position": "RB", "projected_points": 10.0},
+        "wr1": {"player_id": "wr1", "position": "WR", "projected_points": 12.0},
+        "wr2": {"player_id": "wr2", "position": "WR", "projected_points": 11.0},
+        "te1": {"player_id": "te1", "position": "TE", "projected_points": 9.0},
+        "wr3": {"player_id": "wr3", "position": "WR", "projected_points": 8.0},
+        "k1": {"player_id": "k1", "position": "K", "projected_points": 7.0},
+        "SEA": {"player_id": "SEA", "position": "DEF", "projected_points": 6.0},
+    }
+
+    result = resolve_real_starters(slot_order, sleeper_starter_ids, info_by_id)
+
+    assert [(p["player_id"], p["slot"]) for p in result] == [
+        ("qb1", "QB"), ("rb1", "RB"), ("rb2", "RB"), ("wr1", "WR"), ("wr2", "WR"),
+        ("te1", "TE"), ("wr3", "FLEX"), ("k1", "K"), ("SEA", "DEF"),
+    ]
+
+
+def test_resolve_real_starters_skips_empty_slot_placeholder():
+    result = resolve_real_starters(["QB", "RB"], ["qb1", "0"], {"qb1": {"player_id": "qb1", "position": "QB", "projected_points": 20.0}})
+    assert [p["player_id"] for p in result] == ["qb1"]
+
+
+def test_resolve_real_starters_stubs_a_starter_missing_this_weeks_projection():
+    result = resolve_real_starters(["QB"], ["qb_on_bye"], {})
+    assert result == [
+        {
+            "player_id": "qb_on_bye",
+            "position": "UNKNOWN",
+            "name": None,
+            "team": None,
+            "injury_status": None,
+            "projected_points": 0.0,
+            "slot": "QB",
+        }
+    ]
 
 
 def _player(player_id, position, projected_points):
