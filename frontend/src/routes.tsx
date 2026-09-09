@@ -10,6 +10,7 @@ import MatchupSimulator from "./pages/MatchupSimulator";
 import SelectRoster from "./pages/SelectRoster";
 import Trade from "./pages/Trade";
 import TradeFinder from "./pages/TradeFinder";
+import Waivers from "./pages/Waivers";
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { session, loading } = useAuth();
@@ -58,6 +59,7 @@ export default function AppRoutes() {
         <Route path="trade" element={<Trade />} />
         <Route path="trade-finder" element={<TradeFinder />} />
         <Route path="matchup-simulator" element={<MatchupSimulator />} />
+        <Route path="waivers" element={<Waivers />} />
       </Route>
     </Routes>
   );

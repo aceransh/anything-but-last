@@ -104,12 +104,20 @@ def list_rosters(league_id: str, user: UserContext = Depends(get_current_user)):
 
 @router.patch("/{league_id}", response_model=LeagueOut)
 def claim_roster(league_id: str, payload: RosterClaim, user: UserContext = Depends(get_current_user)):
-    get_owned_league(league_id, user.user_id)  # 404s if not the caller's own league
+    league = get_owned_league(league_id, user.user_id)  # 404s if not the caller's own league
+
+    # Only fields actually present in the request body get updated -- lets
+    # the roster-claim step and the waiver Discord-webhook save (see
+    # routers/waivers.py) share this one endpoint without clobbering the
+    # other field on every call.
+    updates = payload.model_dump(exclude_unset=True)
+    if not updates:
+        return league
 
     result = (
         get_supabase()
         .table("leagues")
-        .update({"sleeper_roster_id": payload.sleeper_roster_id})
+        .update(updates)
         .eq("id", league_id)
         .eq("user_id", user.user_id)
         .execute()

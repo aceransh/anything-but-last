@@ -16,6 +16,7 @@ const TABS = [
   { to: "trade", label: "Trade Evaluator" },
   { to: "trade-finder", label: "Trade Finder" },
   { to: "matchup-simulator", label: "Matchup Simulator" },
+  { to: "waivers", label: "Waivers" },
 ];
 
 export default function LeagueLayout() {

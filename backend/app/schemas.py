@@ -22,6 +22,7 @@ class LeagueOut(BaseModel):
     season: str
     created_at: str
     sleeper_roster_id: int | None = None
+    discord_webhook_url: str | None = None
 
 
 class RosterOption(BaseModel):
@@ -30,7 +31,12 @@ class RosterOption(BaseModel):
 
 
 class RosterClaim(BaseModel):
-    sleeper_roster_id: int
+    # Both optional so this same PATCH also carries the waiver-alert Discord
+    # webhook (see routers/waivers.py) without a second endpoint -- only
+    # fields actually present in the request body get updated (see
+    # claim_roster's model_dump(exclude_unset=True)).
+    sleeper_roster_id: int | None = None
+    discord_webhook_url: str | None = None
 
 
 class LineupPlayer(BaseModel):
@@ -203,3 +209,45 @@ class PlayoffOddsResponse(BaseModel):
     playoff_teams: int
     playoff_week_start: int | None = None
     entries: list[PlayoffOddsEntry]
+
+
+class WaiverTarget(BaseModel):
+    player_id: str
+    position: str
+    projected_points: float
+    name: str | None = None
+    team: str | None = None
+    injury_status: str | None = None
+    add_count: int
+    delta_v: float  # marginal starter-upgrade points, V_opt(R U {p}) - V_opt(R)
+    roi_temporal: float
+    scarcity: float
+    competitor_multiplier: float
+    # None when the league doesn't use FAAB budgets (see is_faab_league) --
+    # delta_v/scarcity ranking is still meaningful without a dollar figure.
+    recommended_bid: int | None = None
+
+
+class WaiverBoardResponse(BaseModel):
+    week: int
+    is_faab_league: bool
+    faab_total: int | None = None
+    faab_remaining: int | None = None
+    targets: list[WaiverTarget]
+
+
+class WaiverAlert(BaseModel):
+    id: str
+    league_id: str
+    sleeper_player_id: str
+    week: int
+    alerted_at: str
+    read_at: str | None = None
+    player_name: str | None = None
+    position: str | None = None
+    team: str | None = None
+
+
+class WaiverScanResponse(BaseModel):
+    leagues_scanned: int
+    alerts_sent: int

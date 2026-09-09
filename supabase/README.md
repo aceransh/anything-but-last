@@ -20,13 +20,19 @@ version only pins `project_id` so `supabase link` has something to attach to.
 ## Current tables
 
 - `leagues` -- one row per Sleeper league a user has connected. RLS-scoped
-  to `auth.uid() = user_id`.
+  to `auth.uid() = user_id`. Also carries `discord_webhook_url` (nullable,
+  per-league) for the waiver-alert scan job.
+- `waiver_alerts` -- one row per (league, player, week) actually alerted by
+  the scheduled waiver scan, the dedupe key that stops a still-trending
+  player from re-alerting every run. RLS-scoped via a join back to
+  `leagues.user_id`; written by the scan job through the service-role
+  client, which bypasses RLS like every other backend write.
 
 ## Deliberately not built yet
 
-Rosters, matchups, trades, waiver alerts, and opponent behavioral profiles
-all need their own tables eventually (see the season-tools feature
-backlog), but none are created yet -- add each as its own migration when
-that feature is actually implemented, scoped to what it actually needs.
-Pre-creating empty tables for unbuilt features isn't worth the schema churn
-risk of guessing wrong about their shape now.
+Rosters, matchups, trades, and opponent behavioral profiles still need
+their own tables eventually (see the season-tools feature backlog), but
+none are created yet -- add each as its own migration when that feature is
+actually implemented, scoped to what it actually needs. Pre-creating empty
+tables for unbuilt features isn't worth the schema churn risk of guessing
+wrong about their shape now.

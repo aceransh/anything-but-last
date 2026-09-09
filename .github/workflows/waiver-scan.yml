@@ -1,0 +1,21 @@
+name: Waiver alert scan
+
+# Vercel's Hobby plan caps Cron Jobs to once a day -- too slow for "alert
+# within the hour of a breaking injury". GitHub Actions' own free scheduled
+# workflows have no such cap, so this hits the backend's protected scan
+# endpoint hourly instead of using backend/vercel.json's crons -- same $0
+# cost, no Vercel plan change needed. See CLAUDE.md's "FAAB Waiver Bid
+# Valuation" section.
+on:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger waiver scan
+        run: |
+          curl -sf -X POST "https://backend-plum-rho-79.vercel.app/internal/waiver-scan" \
+            -H "X-Cron-Secret: ${{ secrets.CRON_SECRET }}"
