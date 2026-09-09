@@ -48,11 +48,13 @@ interface TeamTradeResult {
   differential: number;
   verdict: string;
   lineup_impact: LineupImpact;
+  playoff_lineup_impact: LineupImpact | null;
 }
 
 interface TradeEvaluateResponse {
   start_week: number;
   end_week: number;
+  playoff_start_week: number | null;
   teams: TeamTradeResult[];
 }
 
@@ -70,6 +72,10 @@ function sortByPositionThenPoints(players: RosterPlayer[]): RosterPlayer[] {
     const rankDiff = positionRank(a.position) - positionRank(b.position);
     return rankDiff !== 0 ? rankDiff : b.projected_points - a.projected_points;
   });
+}
+
+function signed(value: number): string {
+  return `${value > 0 ? "+" : ""}${value.toFixed(1)}`;
 }
 
 export default function Trade() {
@@ -382,59 +388,72 @@ export default function Trade() {
 
       {result && (
         <div className="mt-6 flex gap-4 overflow-x-auto pb-2">
-          {result.teams.map((team) => (
-            <Card key={team.roster_id} className="w-80 shrink-0">
-              <div className="mb-2 flex items-center gap-2">
-                <Avatar name={teamLabel(team.roster_id)} size={24} />
-                <h3 className="font-semibold text-foreground">{teamLabel(team.roster_id)}</h3>
-              </div>
-              <p className="mb-1 font-semibold text-primary">{team.verdict}</p>
-              <p className="mb-3 text-xs text-muted-foreground">
-                Gives {team.giving_total.toFixed(1)} pts, gets {team.receiving_total.toFixed(1)} pts
-                (weeks {result.start_week}-{result.end_week})
-              </p>
-              {team.giving_players.length > 0 && (
-                <>
-                  <p className="text-xs font-semibold text-muted-foreground">Sends</p>
-                  <ul>
-                    {sortByPositionThenPoints(team.giving_players).map((p) => (
-                      <PlayerRow
-                        key={p.player_id}
-                        playerId={p.player_id}
-                        position={p.position}
-                        name={p.name}
-                        team={p.team}
-                        points={p.projected_points}
-                      />
-                    ))}
-                  </ul>
-                </>
-              )}
-              {team.receiving_players.length > 0 && (
-                <>
-                  <p className="mt-2 text-xs font-semibold text-muted-foreground">Receives</p>
-                  <ul>
-                    {sortByPositionThenPoints(team.receiving_players).map((p) => (
-                      <PlayerRow
-                        key={p.player_id}
-                        playerId={p.player_id}
-                        position={p.position}
-                        name={p.name}
-                        team={p.team}
-                        points={p.projected_points}
-                      />
-                    ))}
-                  </ul>
-                </>
-              )}
-              <p className="mt-3 border-t border-border pt-2 text-xs text-muted-foreground">
-                Weekly lineup: {team.lineup_impact.before_total_projected_points.toFixed(1)} →{" "}
-                {team.lineup_impact.after_total_projected_points.toFixed(1)} pts (
-                {team.lineup_impact.change > 0 ? "+" : ""}
-                {team.lineup_impact.change.toFixed(1)})
-              </p>
-            </Card>
-          ))}
+          {result.teams.map((team) => {
+            const numWeeks = result.end_week - result.start_week + 1;
+            const perWeek = team.lineup_impact.change / numWeeks;
+            return (
+              <Card key={team.roster_id} className="w-80 shrink-0">
+                <div className="mb-2 flex items-center gap-2">
+                  <Avatar name={teamLabel(team.roster_id)} size={24} />
+                  <h3 className="font-semibold text-foreground">{teamLabel(team.roster_id)}</h3>
+                </div>
+                <p className="mb-0.5 font-semibold text-primary">{team.verdict}</p>
+                <p className="mb-3 text-xs text-muted-foreground">
+                  ~{signed(perWeek)} pts/week for the rest of the season
+                </p>
+                <p className="mb-2 text-xs text-muted-foreground">
+                  Gives up {team.giving_total.toFixed(1)} pts of talent, gets back{" "}
+                  {team.receiving_total.toFixed(1)} — but a roster can only start so many players,
+                  so here's the real effect on the best lineup:
+                </p>
+                <p className="mb-1 text-xs text-muted-foreground">
+                  Weekly lineup: {team.lineup_impact.before_total_projected_points.toFixed(1)} →{" "}
+                  {team.lineup_impact.after_total_projected_points.toFixed(1)} pts (
+                  {signed(team.lineup_impact.change)})
+                </p>
+                {team.playoff_lineup_impact && result.playoff_start_week != null && (
+                  <p className="mb-3 text-xs font-semibold text-primary">
+                    Your playoffs (weeks {result.playoff_start_week}-{result.end_week}):{" "}
+                    {signed(team.playoff_lineup_impact.change)} pts
+                  </p>
+                )}
+                {team.giving_players.length > 0 && (
+                  <>
+                    <p className="text-xs font-semibold text-muted-foreground">Sends</p>
+                    <ul>
+                      {sortByPositionThenPoints(team.giving_players).map((p) => (
+                        <PlayerRow
+                          key={p.player_id}
+                          playerId={p.player_id}
+                          position={p.position}
+                          name={p.name}
+                          team={p.team}
+                          points={p.projected_points}
+                        />
+                      ))}
+                    </ul>
+                  </>
+                )}
+                {team.receiving_players.length > 0 && (
+                  <>
+                    <p className="mt-2 text-xs font-semibold text-muted-foreground">Receives</p>
+                    <ul>
+                      {sortByPositionThenPoints(team.receiving_players).map((p) => (
+                        <PlayerRow
+                          key={p.player_id}
+                          playerId={p.player_id}
+                          position={p.position}
+                          name={p.name}
+                          team={p.team}
+                          points={p.projected_points}
+                        />
+                      ))}
+                    </ul>
+                  </>
+                )}
+              </Card>
+            );
+          })}
         </div>
       )}
     </div>

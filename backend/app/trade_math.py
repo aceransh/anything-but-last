@@ -59,6 +59,7 @@ def evaluate_trade(
     moves: list[dict],
     slot_requirements: dict[str, int],
     threshold: float = 5.0,
+    playoff_start_week: int | None = None,
 ) -> dict:
     """rosters: {roster_id: [player, ...]} -- every participating team's
     full current roster, valued by rest-of-season point totals (used for
@@ -74,6 +75,16 @@ def evaluate_trade(
     moves: [{"player_id", "from_roster_id", "to_roster_id"}, ...] -- one
     entry per player changing hands. A 2-team trade is just the N=2 case
     of this same shape.
+
+    playoff_start_week: if given, each team also gets a second
+    lineup-impact breakdown scoped to weeks >= this one -- a trade can
+    genuinely help across the whole remaining season while doing nothing
+    for the specific weeks that decide your fantasy playoffs (or vice
+    versa), and the season-total number alone can't show that. This is
+    a second honest number, not a weight applied to the first one --
+    deliberately not folded into a single blended score (see this
+    project's own repeated stance against unvalidated multipliers on
+    top of a real signal).
 
     Raises ValueError if a move's player isn't actually on its
     from_roster, or references a roster not in `rosters`.
@@ -118,6 +129,18 @@ def evaluate_trade(
             weekly_pools, slot_requirements, outgoing_ids, incoming_ids, weekly_player_lookup
         )
 
+        playoff_lineup_impact = None
+        if playoff_start_week is not None:
+            playoff_weekly_pools = {w: p for w, p in weekly_pools.items() if w >= playoff_start_week}
+            if playoff_weekly_pools:
+                playoff_lineup_impact = _sum_weekly_lineup_impact(
+                    playoff_weekly_pools,
+                    slot_requirements,
+                    outgoing_ids,
+                    incoming_ids,
+                    weekly_player_lookup,
+                )
+
         teams.append(
             {
                 "roster_id": roster_id,
@@ -128,6 +151,7 @@ def evaluate_trade(
                 "differential": lineup_impact["change"],
                 "verdict": build_verdict(lineup_impact["change"], threshold),
                 "lineup_impact": lineup_impact,
+                "playoff_lineup_impact": playoff_lineup_impact,
             }
         )
 

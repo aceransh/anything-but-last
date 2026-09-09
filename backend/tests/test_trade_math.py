@@ -210,3 +210,59 @@ def test_evaluate_trade_lineup_impact_unchanged_when_swap_is_bench_only():
 
     assert _team(result, 1)["lineup_impact"]["change"] == 0.0
     assert _team(result, 2)["lineup_impact"]["change"] == 0.0
+
+
+def test_evaluate_trade_playoff_breakdown_can_differ_from_season_total():
+    # RB_X helps weeks 1-2 (regular season) but is on bye during week 3
+    # (the only playoff week here); RB_Y is the reverse. Season-total
+    # impact for team 1 receiving RB_Y ties out at a small gain, but the
+    # playoff-only breakdown should show it does nothing for the weeks
+    # that actually decide anything.
+    weekly_rosters = {
+        1: {1: [_p("rb_x", "RB", 10.0)], 2: [_p("rb_y", "RB", 0.0)]},
+        2: {1: [_p("rb_x", "RB", 10.0)], 2: [_p("rb_y", "RB", 0.0)]},
+        3: {1: [], 2: [_p("rb_y", "RB", 15.0)]},  # rb_x on bye week 3
+    }
+    rosters = {
+        1: [_p("rb_x", "RB", 20.0)],
+        2: [_p("rb_y", "RB", 15.0)],
+    }
+    moves = [{"player_id": "rb_y", "from_roster_id": 2, "to_roster_id": 1}]
+
+    result = evaluate_trade(
+        rosters, weekly_rosters, moves, slot_requirements={"RB": 1}, playoff_start_week=3
+    )
+
+    team1 = _team(result, 1)
+    # Season total: week1 10, week2 10, week3 max(0, 15)=15 after adding
+    # rb_y -> before=20 (10+10+0), after=35 (10+10+15), change=+15.
+    assert team1["lineup_impact"]["change"] == 15.0
+    # Playoff-only (week 3): before=0 (rb_x on bye, nothing to start),
+    # after=15 (rb_y fills the bye) -- still a real gain here, just
+    # confirming the breakdown is scoped correctly, not double-counting
+    # the regular-season weeks.
+    assert team1["playoff_lineup_impact"] == {
+        "before_total_projected_points": 0.0,
+        "after_total_projected_points": 15.0,
+        "change": 15.0,
+    }
+
+
+def test_evaluate_trade_playoff_breakdown_none_when_not_provided():
+    rosters = {1: [_p("wr1", "WR", 10.0)], 2: [_p("wr2", "WR", 10.0)]}
+    moves = [{"player_id": "wr2", "from_roster_id": 2, "to_roster_id": 1}]
+
+    result = evaluate_trade(rosters, _single_week(rosters), moves, slot_requirements={"WR": 1})
+
+    assert _team(result, 1)["playoff_lineup_impact"] is None
+
+
+def test_evaluate_trade_playoff_breakdown_none_when_playoffs_already_past_range():
+    rosters = {1: [_p("wr1", "WR", 10.0)], 2: [_p("wr2", "WR", 10.0)]}
+    moves = [{"player_id": "wr2", "from_roster_id": 2, "to_roster_id": 1}]
+
+    result = evaluate_trade(
+        rosters, _single_week(rosters, week=1), moves, slot_requirements={"WR": 1}, playoff_start_week=99
+    )
+
+    assert _team(result, 1)["playoff_lineup_impact"] is None

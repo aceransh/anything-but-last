@@ -123,9 +123,15 @@ class TeamTradeResult(BaseModel):
     differential: float  # lineup_impact.change -- real optimal-lineup swing, not raw point totals
     verdict: str
     lineup_impact: LineupImpactSide
+    # Same shape, scoped to weeks >= TradeEvaluateResponse.playoff_start_week --
+    # a second honest number, not folded into the season-total one above.
+    # None if the league's playoff_week_start is unknown or already past
+    # the evaluated week range.
+    playoff_lineup_impact: LineupImpactSide | None = None
 
 
 class TradeEvaluateResponse(BaseModel):
     start_week: int
     end_week: int
+    playoff_start_week: int | None = None
     teams: list[TeamTradeResult]

@@ -117,6 +117,11 @@ def evaluate_trade(
 
     league_settings = _sleeper_get(SLEEPER_LEAGUE_URL.format(league_id=sleeper_league_id))
     slot_requirements = build_slot_requirements(league_settings.get("roster_positions", []))
+    # Sleeper exposes this under the nested "settings" object, not top-level
+    # like roster_positions -- e.g. 15 for a typical 14-week regular season.
+    # Used to break out a "does this help during your actual playoffs"
+    # breakdown, not to weight/multiply anything (see trade_math.evaluate_trade).
+    playoff_start_week = (league_settings.get("settings") or {}).get("playoff_week_start")
 
     sleeper_rosters = _sleeper_get(SLEEPER_ROSTERS_URL.format(league_id=sleeper_league_id))
     roster_player_ids: dict[int, set[str]] = {}
@@ -187,6 +192,7 @@ def evaluate_trade(
             weekly_rosters,
             [move.model_dump() for move in payload.moves],
             slot_requirements,
+            playoff_start_week=playoff_start_week,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -194,5 +200,6 @@ def evaluate_trade(
     return TradeEvaluateResponse(
         start_week=start_week,
         end_week=LAST_SCORED_WEEK,
+        playoff_start_week=playoff_start_week,
         **result,
     )
