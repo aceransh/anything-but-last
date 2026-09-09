@@ -135,3 +135,16 @@ class TradeEvaluateResponse(BaseModel):
     end_week: int
     playoff_start_week: int | None = None
     teams: list[TeamTradeResult]
+
+
+class TradeCandidate(BaseModel):
+    roster_ids: list[int]
+    moves: list[TradeMove]
+    teams: list[TeamTradeResult]
+
+
+class TradeFinderResponse(BaseModel):
+    start_week: int
+    end_week: int
+    playoff_start_week: int | None = None
+    candidates: list[TradeCandidate]

@@ -8,6 +8,7 @@ import Lineup from "./pages/Lineup";
 import Login from "./pages/Login";
 import SelectRoster from "./pages/SelectRoster";
 import Trade from "./pages/Trade";
+import TradeFinder from "./pages/TradeFinder";
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { session, loading } = useAuth();
@@ -54,6 +55,7 @@ export default function AppRoutes() {
       >
         <Route path="lineup" element={<Lineup />} />
         <Route path="trade" element={<Trade />} />
+        <Route path="trade-finder" element={<TradeFinder />} />
       </Route>
     </Routes>
   );

@@ -1,8 +1,13 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useLocation, useParams } from "react-router-dom";
 import Avatar from "@/components/Avatar";
 import Card from "@/components/Card";
 import PlayerRow from "@/components/PlayerRow";
+import TradeResultCard, {
+  type RosterPlayer,
+  type TeamTradeResult,
+  sortByPositionThenPoints,
+} from "@/components/TradeResultCard";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -24,33 +29,6 @@ interface RosterOption {
   owner_display_name: string;
 }
 
-interface RosterPlayer {
-  player_id: string;
-  position: string;
-  projected_points: number;
-  name: string | null;
-  team: string | null;
-  injury_status: string | null;
-}
-
-interface LineupImpact {
-  before_total_projected_points: number;
-  after_total_projected_points: number;
-  change: number;
-}
-
-interface TeamTradeResult {
-  roster_id: number;
-  giving_players: RosterPlayer[];
-  receiving_players: RosterPlayer[];
-  giving_total: number;
-  receiving_total: number;
-  differential: number;
-  verdict: string;
-  lineup_impact: LineupImpact;
-  playoff_lineup_impact: LineupImpact | null;
-}
-
 interface TradeEvaluateResponse {
   start_week: number;
   end_week: number;
@@ -58,34 +36,31 @@ interface TradeEvaluateResponse {
   teams: TeamTradeResult[];
 }
 
-// Fixed scan order so each column reads like a real roster page, not an
-// arbitrary API-response order.
-const POSITION_ORDER = ["QB", "RB", "WR", "TE", "K", "DEF"];
-
-function positionRank(position: string): number {
-  const index = POSITION_ORDER.indexOf(position);
-  return index === -1 ? POSITION_ORDER.length : index;
-}
-
-function sortByPositionThenPoints(players: RosterPlayer[]): RosterPlayer[] {
-  return [...players].sort((a, b) => {
-    const rankDiff = positionRank(a.position) - positionRank(b.position);
-    return rankDiff !== 0 ? rankDiff : b.projected_points - a.projected_points;
-  });
-}
-
-function signed(value: number): string {
-  return `${value > 0 ? "+" : ""}${value.toFixed(1)}`;
+// State the Trade Finder page hands off via router state when the user
+// picks "Open in builder" on a suggested trade -- pre-fills the team
+// selection and per-player destinations and jumps straight to the
+// assign-players step, instead of making them rebuild it by hand.
+export interface TradePrefill {
+  rosterIds: number[];
+  destinations: Record<string, number>;
 }
 
 export default function Trade() {
   const { leagueId } = useParams<{ leagueId: string }>();
+  const location = useLocation();
+  const prefill = (location.state as { prefill?: TradePrefill } | null)?.prefill;
   const [ownRosterId, setOwnRosterId] = useState<number | null | undefined>(undefined);
   const [rosters, setRosters] = useState<RosterOption[] | null>(null);
-  const [step, setStep] = useState<"select-teams" | "assign-players">("select-teams");
-  const [selectedRosterIds, setSelectedRosterIds] = useState<Set<number>>(new Set());
+  const [step, setStep] = useState<"select-teams" | "assign-players">(
+    prefill ? "assign-players" : "select-teams",
+  );
+  const [selectedRosterIds, setSelectedRosterIds] = useState<Set<number>>(
+    () => new Set(prefill?.rosterIds ?? []),
+  );
   const [rosterPlayers, setRosterPlayers] = useState<Record<number, RosterPlayer[] | null>>({});
-  const [destinations, setDestinations] = useState<Record<string, number>>({});
+  const [destinations, setDestinations] = useState<Record<string, number>>(
+    prefill?.destinations ?? {},
+  );
   const [result, setResult] = useState<TradeEvaluateResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [evaluating, setEvaluating] = useState(false);
@@ -388,72 +363,16 @@ export default function Trade() {
 
       {result && (
         <div className="mt-6 flex gap-4 overflow-x-auto pb-2">
-          {result.teams.map((team) => {
-            const numWeeks = result.end_week - result.start_week + 1;
-            const perWeek = team.lineup_impact.change / numWeeks;
-            return (
-              <Card key={team.roster_id} className="w-80 shrink-0">
-                <div className="mb-2 flex items-center gap-2">
-                  <Avatar name={teamLabel(team.roster_id)} size={24} />
-                  <h3 className="font-semibold text-foreground">{teamLabel(team.roster_id)}</h3>
-                </div>
-                <p className="mb-0.5 font-semibold text-primary">{team.verdict}</p>
-                <p className="mb-3 text-xs text-muted-foreground">
-                  ~{signed(perWeek)} pts/week for the rest of the season
-                </p>
-                <p className="mb-2 text-xs text-muted-foreground">
-                  Gives up {team.giving_total.toFixed(1)} pts of talent, gets back{" "}
-                  {team.receiving_total.toFixed(1)} — but a roster can only start so many players,
-                  so here's the real effect on the best lineup:
-                </p>
-                <p className="mb-1 text-xs text-muted-foreground">
-                  Weekly lineup: {team.lineup_impact.before_total_projected_points.toFixed(1)} →{" "}
-                  {team.lineup_impact.after_total_projected_points.toFixed(1)} pts (
-                  {signed(team.lineup_impact.change)})
-                </p>
-                {team.playoff_lineup_impact && result.playoff_start_week != null && (
-                  <p className="mb-3 text-xs font-semibold text-primary">
-                    Your playoffs (weeks {result.playoff_start_week}-{result.end_week}):{" "}
-                    {signed(team.playoff_lineup_impact.change)} pts
-                  </p>
-                )}
-                {team.giving_players.length > 0 && (
-                  <>
-                    <p className="text-xs font-semibold text-muted-foreground">Sends</p>
-                    <ul>
-                      {sortByPositionThenPoints(team.giving_players).map((p) => (
-                        <PlayerRow
-                          key={p.player_id}
-                          playerId={p.player_id}
-                          position={p.position}
-                          name={p.name}
-                          team={p.team}
-                          points={p.projected_points}
-                        />
-                      ))}
-                    </ul>
-                  </>
-                )}
-                {team.receiving_players.length > 0 && (
-                  <>
-                    <p className="mt-2 text-xs font-semibold text-muted-foreground">Receives</p>
-                    <ul>
-                      {sortByPositionThenPoints(team.receiving_players).map((p) => (
-                        <PlayerRow
-                          key={p.player_id}
-                          playerId={p.player_id}
-                          position={p.position}
-                          name={p.name}
-                          team={p.team}
-                          points={p.projected_points}
-                        />
-                      ))}
-                    </ul>
-                  </>
-                )}
-              </Card>
-            );
-          })}
+          {result.teams.map((team) => (
+            <TradeResultCard
+              key={team.roster_id}
+              team={team}
+              teamLabel={teamLabel(team.roster_id)}
+              numWeeks={result.end_week - result.start_week + 1}
+              playoffStartWeek={result.playoff_start_week}
+              endWeek={result.end_week}
+            />
+          ))}
         </div>
       )}
     </div>

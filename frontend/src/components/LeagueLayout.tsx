@@ -14,6 +14,7 @@ interface League {
 const TABS = [
   { to: "lineup", label: "Lineup" },
   { to: "trade", label: "Trade Evaluator" },
+  { to: "trade-finder", label: "Trade Finder" },
 ];
 
 export default function LeagueLayout() {

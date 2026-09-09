@@ -3,10 +3,16 @@ from concurrent.futures import ThreadPoolExecutor
 import requests
 from fastapi import APIRouter, Depends, HTTPException
 
-from .. import trade_math
+from .. import trade_finder, trade_math
 from ..deps import UserContext, get_current_user
 from ..lineup_math import build_slot_requirements
-from ..schemas import TradeEvaluateRequest, TradeEvaluateResponse, TradeRosterPlayer
+from ..schemas import (
+    TradeCandidate,
+    TradeEvaluateRequest,
+    TradeEvaluateResponse,
+    TradeFinderResponse,
+    TradeRosterPlayer,
+)
 from .leagues import get_owned_league
 
 router = APIRouter()
@@ -22,6 +28,13 @@ FANTASY_POSITIONS = ["QB", "RB", "WR", "TE", "K", "DEF"]
 # a specific league's own playoff_week_start -- same simplification as the
 # week upper bound used elsewhere in this app (lineup.py's week query param).
 LAST_SCORED_WEEK = 18
+
+# Trade finder tuning -- see trade_finder.py's module docstring and
+# CLAUDE.md's "Multi-Team Trade Finder" section for why these specific
+# numbers keep k<=4 cycles with 2-for-1 packages tractable synchronously.
+MAX_CYCLE_LENGTH = 4
+MAX_RANKED_CANDIDATES = 25  # phase-1 cap before the expensive per-week validation
+MAX_RESULTS = 10
 
 
 def _sleeper_get(url: str, **kwargs) -> dict | list:
@@ -102,15 +115,14 @@ def get_roster_players(
     return players
 
 
-@router.post("/{league_id}/trade-evaluate", response_model=TradeEvaluateResponse)
-def evaluate_trade(
-    league_id: str,
-    payload: TradeEvaluateRequest,
-    user: UserContext = Depends(get_current_user),
-):
-    league = get_owned_league(league_id, user.user_id)
-    sleeper_league_id = league["sleeper_league_id"]
-
+def _fetch_trade_data(sleeper_league_id: str, roster_ids: list[int]) -> dict:
+    """Fetches everything trade math needs for the given rosters: this
+    week's state, slot requirements + playoff_start_week from league
+    settings, and rest-of-season weekly projections filed per roster.
+    Shared by trade-evaluate (a user-picked subset of rosters) and
+    trade-finder (every roster in the league) so neither duplicates this
+    fetch-and-shape logic. Raises 404 if a roster_id isn't in this league.
+    """
     state = _sleeper_get(SLEEPER_STATE_URL)
     season = state["season"]
     start_week = state["week"]
@@ -125,7 +137,7 @@ def evaluate_trade(
 
     sleeper_rosters = _sleeper_get(SLEEPER_ROSTERS_URL.format(league_id=sleeper_league_id))
     roster_player_ids: dict[int, set[str]] = {}
-    for roster_id in payload.roster_ids:
+    for roster_id in roster_ids:
         roster = _find_roster(sleeper_rosters, roster_id)
         if roster is None:
             raise HTTPException(status_code=404, detail=f"Roster {roster_id} not found in this league")
@@ -186,20 +198,96 @@ def evaluate_trade(
 
     rosters = {roster_id: _build_pool(ids) for roster_id, ids in roster_player_ids.items()}
 
+    return {
+        "season": season,
+        "start_week": start_week,
+        "slot_requirements": slot_requirements,
+        "playoff_start_week": playoff_start_week,
+        "weekly_rosters": weekly_rosters,
+        "rosters": rosters,
+    }
+
+
+@router.post("/{league_id}/trade-evaluate", response_model=TradeEvaluateResponse)
+def evaluate_trade(
+    league_id: str,
+    payload: TradeEvaluateRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    league = get_owned_league(league_id, user.user_id)
+    data = _fetch_trade_data(league["sleeper_league_id"], payload.roster_ids)
+
     try:
         result = trade_math.evaluate_trade(
-            rosters,
-            weekly_rosters,
+            data["rosters"],
+            data["weekly_rosters"],
             [move.model_dump() for move in payload.moves],
-            slot_requirements,
-            playoff_start_week=playoff_start_week,
+            data["slot_requirements"],
+            playoff_start_week=data["playoff_start_week"],
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return TradeEvaluateResponse(
-        start_week=start_week,
+        start_week=data["start_week"],
         end_week=LAST_SCORED_WEEK,
-        playoff_start_week=playoff_start_week,
+        playoff_start_week=data["playoff_start_week"],
         **result,
+    )
+
+
+@router.get("/{league_id}/trade-finder", response_model=TradeFinderResponse)
+def find_trades(
+    league_id: str,
+    user: UserContext = Depends(get_current_user),
+):
+    league = get_owned_league(league_id, user.user_id)
+    own_roster_id = league.get("sleeper_roster_id")
+    if own_roster_id is None:
+        raise HTTPException(status_code=400, detail="Claim a roster in this league first")
+
+    sleeper_league_id = league["sleeper_league_id"]
+    sleeper_rosters = _sleeper_get(SLEEPER_ROSTERS_URL.format(league_id=sleeper_league_id))
+    all_roster_ids = [r["roster_id"] for r in sleeper_rosters]
+
+    data = _fetch_trade_data(sleeper_league_id, all_roster_ids)
+
+    # Phase 1 (cheap, ROS-total based): build the manager graph and find
+    # every elementary cycle through the caller's own roster, ranked by a
+    # fast approximate score, capped before anything expensive runs.
+    edges = trade_finder.build_trade_graph(data["rosters"], data["slot_requirements"])
+    cycles = trade_finder.find_cycles_through(own_roster_id, edges, max_length=MAX_CYCLE_LENGTH)
+    ranked = trade_finder.rank_by_edge_value(cycles, edges)[:MAX_RANKED_CANDIDATES]
+
+    # Phase 2 (real, per-week validated): score each surviving candidate
+    # with the exact same, unmodified evaluator the two-team flow uses --
+    # no parallel scoring logic -- and only keep it if every participant's
+    # real differential is positive (the PDF's "mutually beneficial" bar).
+    candidates = []
+    for cycle in ranked:
+        moves = trade_finder.cycle_to_moves(cycle, edges)
+        try:
+            result = trade_math.evaluate_trade(
+                data["rosters"],
+                data["weekly_rosters"],
+                moves,
+                data["slot_requirements"],
+                playoff_start_week=data["playoff_start_week"],
+            )
+        except ValueError:
+            continue
+        if not all(team["differential"] > 0 for team in result["teams"]):
+            continue
+        candidates.append(TradeCandidate(roster_ids=cycle, moves=moves, teams=result["teams"]))
+
+    def _own_differential(candidate: TradeCandidate) -> float:
+        return next(t.differential for t in candidate.teams if t.roster_id == own_roster_id)
+
+    candidates.sort(key=_own_differential, reverse=True)
+
+    return TradeFinderResponse(
+        start_week=data["start_week"],
+        end_week=LAST_SCORED_WEEK,
+        playoff_start_week=data["playoff_start_week"],
+        candidates=candidates[:MAX_RESULTS],
     )
