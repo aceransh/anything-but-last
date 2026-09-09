@@ -148,3 +148,47 @@ class TradeFinderResponse(BaseModel):
     end_week: int
     playoff_start_week: int | None = None
     candidates: list[TradeCandidate]
+
+
+class MatchupPlayer(BaseModel):
+    player_id: str
+    position: str
+    projected_points: float
+    name: str | None = None
+    team: str | None = None
+    injury_status: str | None = None
+    slot: str | None = None
+
+
+class MatchupScoreStats(BaseModel):
+    mean: float
+    median: float
+    p10: float
+    p90: float
+
+
+class MatchupSimulationResponse(BaseModel):
+    week: int
+    own_roster_id: int
+    opponent_roster_id: int
+    win_prob: float
+    opponent_win_prob: float
+    own_score: MatchupScoreStats
+    opponent_score: MatchupScoreStats
+    own_starters: list[MatchupPlayer]
+    opponent_starters: list[MatchupPlayer]
+
+
+class PlayoffOddsEntry(BaseModel):
+    roster_id: int
+    current_wins: int
+    current_losses: int
+    current_ties: int
+    current_fpts: float
+    playoff_odds: float
+
+
+class PlayoffOddsResponse(BaseModel):
+    playoff_teams: int
+    playoff_week_start: int | None = None
+    entries: list[PlayoffOddsEntry]

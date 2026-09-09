@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_settings
-from .routers import health, leagues, lineup, trade
+from .routers import health, leagues, lineup, matchup, trade
 
 app = FastAPI(title="Fantasy Copilot Season Tools API")
 
@@ -19,3 +19,4 @@ app.include_router(health.router)
 app.include_router(leagues.router, prefix="/leagues", tags=["leagues"])
 app.include_router(lineup.router, prefix="/leagues", tags=["lineup"])
 app.include_router(trade.router, prefix="/leagues", tags=["trade"])
+app.include_router(matchup.router, prefix="/leagues", tags=["matchup"])

@@ -5,4 +5,5 @@ pydantic-settings
 supabase
 pyjwt[crypto]
 requests
+numpy
 pytest

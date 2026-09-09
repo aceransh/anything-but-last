@@ -6,6 +6,7 @@ import ConnectLeague from "./pages/ConnectLeague";
 import Dashboard from "./pages/Dashboard";
 import Lineup from "./pages/Lineup";
 import Login from "./pages/Login";
+import MatchupSimulator from "./pages/MatchupSimulator";
 import SelectRoster from "./pages/SelectRoster";
 import Trade from "./pages/Trade";
 import TradeFinder from "./pages/TradeFinder";
@@ -56,6 +57,7 @@ export default function AppRoutes() {
         <Route path="lineup" element={<Lineup />} />
         <Route path="trade" element={<Trade />} />
         <Route path="trade-finder" element={<TradeFinder />} />
+        <Route path="matchup-simulator" element={<MatchupSimulator />} />
       </Route>
     </Routes>
   );
