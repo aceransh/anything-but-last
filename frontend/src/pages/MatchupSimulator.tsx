@@ -118,13 +118,14 @@ export default function MatchupSimulator() {
 
   useEffect(() => {
     if (ownRosterId == null) return;
+    setOddsError(null);
     setLoadingOdds(true);
-    apiFetch(`/leagues/${leagueId}/playoff-odds`)
+    apiFetch(`/leagues/${leagueId}/playoff-odds?source=${source}`)
       .then((res) => res.json())
       .then(setOdds)
       .catch((err) => setOddsError(err instanceof Error ? err.message : "Failed to load playoff odds"))
       .finally(() => setLoadingOdds(false));
-  }, [leagueId, ownRosterId]);
+  }, [leagueId, ownRosterId, source]);
 
   const nameByRosterId = new Map(rosters?.map((r) => [r.sleeper_roster_id, r.owner_display_name]));
 
@@ -134,12 +135,23 @@ export default function MatchupSimulator() {
 
   return (
     <div className="mx-auto max-w-4xl space-y-8">
-      <div>
-        <h1 className="mb-1 text-xl font-bold text-foreground">Matchup Simulator</h1>
-        <p className="text-sm text-muted-foreground">
-          Correlated Monte Carlo simulation of real weekly score variance -- not a single point
-          estimate.
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="mb-1 text-xl font-bold text-foreground">Matchup Simulator</h1>
+          <p className="text-sm text-muted-foreground">
+            Correlated Monte Carlo simulation of real weekly score variance -- not a single point
+            estimate.
+          </p>
+        </div>
+        <Select value={source} onValueChange={(value) => setSource(value as MatchupSource)}>
+          <SelectTrigger size="sm" className="w-40 text-xs">
+            <SelectValue>{SOURCE_LABELS[source]}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="sleeper">Sleeper</SelectItem>
+            <SelectItem value="draftsharks">DraftSharks</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
 
       {error && <p className="text-sm text-destructive">{error}</p>}
@@ -151,18 +163,7 @@ export default function MatchupSimulator() {
 
       {ownRosterId != null && (
         <section>
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-muted-foreground">This Week</h2>
-            <Select value={source} onValueChange={(value) => setSource(value as MatchupSource)}>
-              <SelectTrigger size="sm" className="w-40 text-xs">
-                <SelectValue>{SOURCE_LABELS[source]}</SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="sleeper">Sleeper</SelectItem>
-                <SelectItem value="draftsharks">DraftSharks</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+          <h2 className="mb-3 text-sm font-semibold text-muted-foreground">This Week</h2>
           {loadingMatchup && <p className="text-sm text-muted-foreground">Simulating...</p>}
           {!loadingMatchup && matchup && (
             <Card className="p-4">
@@ -248,7 +249,13 @@ export default function MatchupSimulator() {
             Rest-of-Season Playoff Odds
           </h2>
           {oddsError && <p className="text-sm text-destructive">{oddsError}</p>}
-          {loadingOdds && <p className="text-sm text-muted-foreground">Simulating the rest of the season...</p>}
+          {loadingOdds && (
+            <p className="text-sm text-muted-foreground">
+              {source === "draftsharks"
+                ? "Fetching DraftSharks projections for every remaining week -- this can take longer than Sleeper..."
+                : "Simulating the rest of the season..."}
+            </p>
+          )}
           {odds && (
             <Card className="overflow-hidden p-0">
               <table className="w-full text-sm">

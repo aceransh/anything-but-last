@@ -127,6 +127,7 @@ def get_matchup(
 @router.get("/{league_id}/playoff-odds", response_model=PlayoffOddsResponse)
 def get_playoff_odds(
     league_id: str,
+    source: str = Query(default="sleeper", pattern="^(sleeper|draftsharks)$"),
     user: UserContext = Depends(get_current_user),
 ):
     league = get_owned_league(league_id, user.user_id)
@@ -196,6 +197,19 @@ def get_playoff_odds(
                     continue
                 week_rosters[roster_id].append(player)
             weekly_starters[week] = week_rosters
+
+        if source == "draftsharks":
+            # Real weekly floor/ceiling for every remaining week -- fired in
+            # an outer pool capped at 6 (fetch_weekly_rows is already
+            # internally parallel, 5 requests each), same concurrency cap
+            # already used for the Sleeper weekly-projection fetch above and
+            # for the Trade Evaluator/Finder's identical per-week fetch.
+            with ThreadPoolExecutor(max_workers=6) as executor:
+                ds_rows_by_week = dict(zip(weeks, executor.map(draftsharks.fetch_weekly_rows, weeks)))
+            for week, week_rosters in weekly_starters.items():
+                ds_rows = ds_rows_by_week[week]
+                for roster_id, pool in week_rosters.items():
+                    week_rosters[roster_id] = draftsharks.apply_to_players(pool, ds_rows)
 
     odds = matchup_math.simulate_season(
         standings_now,
